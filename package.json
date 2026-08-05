@@ -1,0 +1,78 @@
+{
+  "name": "crtbox",
+  "productName": "CRTBOX",
+  "version": "0.1.0",
+  "description": "A real-time CRT television emulator for video and audio. Standalone app + web app.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "homepage": "https://github.com/kingdrainman-debug/Analoguehorrorbox",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "electron:dev": "CRTBOX_DEV_SERVER=http://localhost:5173 electron .",
+    "electron:start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:all": "npm run build && electron-builder -mwl",
+    "smoke": "node scripts/smoke.mjs",
+    "shots": "node scripts/shots.mjs",
+    "test": "npm run typecheck && npm run build && npm run smoke"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "playwright-core": "^1.49.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "build": {
+    "appId": "rs.crtbox.app",
+    "productName": "CRTBOX",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "category": "AudioVideo",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
+}

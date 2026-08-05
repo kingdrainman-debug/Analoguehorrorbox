@@ -1,0 +1,1168 @@
+import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  DEFAULTS,
+  GROUPS,
+  ParamValue,
+  Settings,
+  sanitize,
+} from './core/params';
+import { PRESETS, parsePreset, serializePreset } from './core/presets';
+import { randomize, resetGroup } from './core/random';
+import { CrtRenderer, RenderTelemetry } from './video/renderer';
+import { CrtAudioEngine } from './audio/engine';
+import { GroupPanel } from './ui/GroupPanel';
+import { DEFAULT_EXPORT, ExportPanel, ExportSettings } from './ui/ExportPanel';
+import { encodeWav } from './export/wav';
+import { renderProcessedAudio } from './export/offlineAudio';
+import { startRecording } from './export/recorder';
+import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
+import { desktop, isBatchMode, saveBlob } from './platform/desktop';
+
+type Tab = 'video' | 'audio' | 'link';
+
+interface Media {
+  url: string;
+  name: string;
+  kind: 'video' | 'image';
+  /** Present when opened from the local file system (needed for audio export). */
+  blob: Blob | null;
+  path?: string;
+}
+
+const MAX_PREVIEW_PIXELS = 1920 * 1080;
+
+interface ExportResult {
+  ok: boolean;
+  outputPath?: string;
+  error?: string;
+}
+
+export default function App() {
+  const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
+  const [tab, setTab] = useState<Tab>('video');
+  const [advanced, setAdvanced] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const out: Record<string, boolean> = {};
+    for (const g of GROUPS) out[g.id] = ['picture', 'signal', 'beam', 'audio', 'speaker', 'link'].includes(g.id);
+    return out;
+  });
+
+  const [media, setMedia] = useState<Media | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [loop, setLoop] = useState(true);
+  const [split, setSplit] = useState(0);
+  const [seed, setSeed] = useState(1337);
+  const [randomAmount, setRandomAmount] = useState(0.6);
+  const [presetName, setPresetName] = useState('reference');
+  const [pasteText, setPasteText] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+  const [glError, setGlError] = useState('');
+  const [audioArmed, setAudioArmed] = useState(false);
+
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(DEFAULT_EXPORT);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('');
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const rendererRef = useRef<CrtRenderer | null>(null);
+  const engineRef = useRef<CrtAudioEngine>(new CrtAudioEngine(seed));
+  const settingsRef = useRef(settings);
+  const frameRef = useRef(0);
+  const levelRef = useRef(0);
+  const splitRef = useRef(split);
+  const seedRef = useRef(seed);
+  const telemetryRef = useRef<RenderTelemetry>({ humPhase: 0, glitch: 0, degauss: 0, powerOpen: 1 });
+  const abortRef = useRef<AbortController | null>(null);
+  // Set in headless batch mode: the destination is known up front, so the
+  // export path must not stop to ask for one — there is nobody to answer.
+  const batchOutputRef = useRef<string | null>(null);
+  // While an export owns the canvas its size is the output resolution, and the
+  // layout observer must keep its hands off.
+  const exportingRef = useRef(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  // Scratch canvas for the export path's video-to-texture copy.
+  const blitRef = useRef<HTMLCanvasElement | null>(null);
+
+  settingsRef.current = settings;
+  splitRef.current = split;
+  seedRef.current = seed;
+
+  // The batch handler is registered once, so it must not close over state. It
+  // reaches the current media, duration and export callback through these refs.
+  const mediaRef = useRef<Media | null>(null);
+  const durationRef = useRef(0);
+  mediaRef.current = media;
+  durationRef.current = duration;
+
+  /* ---------------- renderer lifecycle ---------------- */
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    try {
+      rendererRef.current = new CrtRenderer(canvas);
+    } catch (err) {
+      setGlError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    return () => {
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+    };
+  }, []);
+
+  /* ---------------- canvas sizing ---------------- */
+
+  const fitCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    const stage = stageRef.current;
+    if (!canvas || !stage || exportingRef.current) return;
+    const rect = stage.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let w = Math.max(2, Math.floor(rect.width * dpr));
+    let h = Math.max(2, Math.floor(rect.height * dpr));
+    const pixels = w * h;
+    if (pixels > MAX_PREVIEW_PIXELS) {
+      const k = Math.sqrt(MAX_PREVIEW_PIXELS / pixels);
+      w = Math.max(2, Math.floor(w * k));
+      h = Math.max(2, Math.floor(h * k));
+    }
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  }, []);
+
+  useEffect(() => {
+    fitCanvas();
+    const stage = stageRef.current;
+    if (!stage) return;
+    const ro = new ResizeObserver(fitCanvas);
+    ro.observe(stage);
+    return () => ro.disconnect();
+  }, [fitCanvas]);
+
+  /* ---------------- one render step ---------------- */
+
+  const renderOnce = useCallback((time: number, frame: number, dt: number, viaCanvas = false) => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    const video = videoRef.current;
+    const image = imageRef.current;
+    if (video && video.videoWidth > 0 && (viaCanvas || video.readyState >= 2)) {
+      // Uploading a <video> straight to a texture is the fast path, but it is
+      // not universally reliable — some compositor configurations hand
+      // texImage2D nothing while drawImage still works. Bouncing through a 2D
+      // canvas costs a copy and always works, so the deterministic export path
+      // takes it.
+      renderer.setSource(
+        viaCanvas ? blitToCanvas(video, video.videoWidth, video.videoHeight, blitRef) : video,
+        video.videoWidth,
+        video.videoHeight,
+      );
+    } else if (image && image.naturalWidth > 0) {
+      renderer.setSource(
+        viaCanvas ? blitToCanvas(image, image.naturalWidth, image.naturalHeight, blitRef) : image,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
+    }
+
+    telemetryRef.current = renderer.render({
+      settings: settingsRef.current,
+      time,
+      frame,
+      dt,
+      audioLevel: levelRef.current,
+      splitX: splitRef.current > 0.001 ? splitRef.current : -1,
+      seed: seedRef.current,
+    });
+  }, []);
+
+  /* ---------------- preview loop ---------------- */
+
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now() / 1000;
+    let wallClock = 0;
+
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      // While a deterministic export is running it owns the canvas: it renders a
+      // frame and then reads it back asynchronously, and a preview frame drawn
+      // in between would be the one that actually got encoded.
+      if (exportingRef.current) return;
+      const now = performance.now() / 1000;
+      const dt = Math.min(now - last, 0.1);
+      last = now;
+
+      const video = videoRef.current;
+      const isVideo = !!video && !!media && media.kind === 'video';
+      // Images have no timeline of their own, but the animated effects still
+      // need one, so they run off the wall clock instead.
+      wallClock += dt;
+      const time = isVideo ? video.currentTime : wallClock;
+
+      renderOnce(time, frameRef.current++, dt);
+
+      const engine = engineRef.current;
+      if (engine.ready) {
+        engine.update(settingsRef.current, telemetryRef.current, time, isVideo ? !video.paused : true);
+        levelRef.current = engine.level();
+      } else {
+        levelRef.current = 0;
+      }
+
+      if (isVideo && Math.abs(video.currentTime - currentTimeRef.current) > 0.02) {
+        currentTimeRef.current = video.currentTime;
+        setCurrentTime(video.currentTime);
+      }
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [media, renderOnce]);
+
+  const currentTimeRef = useRef(0);
+
+  /* ---------------- media loading ---------------- */
+
+  const loadMedia = useCallback(async (next: Media) => {
+    setMedia((prev) => {
+      if (prev && prev.url.startsWith('blob:')) URL.revokeObjectURL(prev.url);
+      return next;
+    });
+    setPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setNotice('');
+    rendererRef.current?.resetHistory();
+    await engineRef.current.detach();
+    setAudioArmed(false);
+  }, []);
+
+  const openFile = useCallback(
+    async (file: File) => {
+      const kind = file.type.startsWith('image') ? 'image' : 'video';
+      await loadMedia({ url: URL.createObjectURL(file), name: file.name, kind, blob: file });
+    },
+    [loadMedia],
+  );
+
+  const openViaDialog = useCallback(async () => {
+    if (desktop) {
+      const picked = await desktop.openMedia();
+      if (!picked) return;
+      const kind = /\.(png|jpe?g|webp|gif|bmp)$/i.test(picked.name) ? 'image' : 'video';
+      let blob: Blob | null = null;
+      try {
+        blob = new Blob([await desktop.readFile(picked.path)]);
+      } catch {
+        blob = null;
+      }
+      await loadMedia({ url: picked.url, name: picked.name, kind, blob, path: picked.path });
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'video/*,image/*';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) void openFile(file);
+    };
+    input.click();
+  }, [loadMedia, openFile]);
+
+  useEffect(() => {
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer?.files?.[0];
+      if (file) void openFile(file);
+    };
+    const onDragOver = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('drop', onDrop);
+    window.addEventListener('dragover', onDragOver);
+    return () => {
+      window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragover', onDragOver);
+    };
+  }, [openFile]);
+
+  /* ---------------- audio arming ---------------- */
+
+  const armAudio = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !media || media.kind !== 'video') return;
+    try {
+      await engineRef.current.attach(video, settingsRef.current);
+      await engineRef.current.resume();
+      setAudioArmed(true);
+    } catch (err) {
+      setNotice(`Audio unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [media]);
+
+  const togglePlay = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!engineRef.current.ready) await armAudio();
+    if (video.paused) {
+      await video.play().catch(() => undefined);
+      setPlaying(true);
+    } else {
+      video.pause();
+      setPlaying(false);
+    }
+  }, [armAudio]);
+
+  /* ---------------- settings plumbing ---------------- */
+
+  const change = useCallback((key: string, value: ParamValue) => {
+    setSettings((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }));
+  }, []);
+
+  const applyPreset = useCallback((id: string) => {
+    const preset = PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    setSettings({ ...preset.settings });
+    setPresetName(id);
+    rendererRef.current?.resetHistory();
+  }, []);
+
+  const doRandomize = useCallback(() => {
+    const nextSeed = Math.floor(Math.random() * 0x7fffffff);
+    setSeed(nextSeed);
+    setSettings((prev) =>
+      randomize(prev, {
+        seed: nextSeed,
+        amount: randomAmount,
+        groups: tab === 'video'
+          ? GROUPS.filter((g) => g.kind === 'video').map((g) => g.id)
+          : tab === 'audio'
+            ? GROUPS.filter((g) => g.kind === 'audio').map((g) => g.id)
+            : undefined,
+      }),
+    );
+    setPresetName('');
+  }, [randomAmount, tab]);
+
+  const copySettings = useCallback(async () => {
+    const text = serializePreset(settings, presetName || undefined);
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice('Settings copied as JSON.');
+    } catch {
+      setPasteText(text);
+      setNotice('Clipboard blocked — here is the JSON.');
+    }
+  }, [settings, presetName]);
+
+  const applyPasted = useCallback(
+    (text: string) => {
+      const result = parsePreset(text, DEFAULTS);
+      if (!result.ok || !result.settings) {
+        setNotice(`Error: ${result.error}`);
+        return;
+      }
+      setSettings(result.settings);
+      setPresetName(result.name ?? '');
+      setPasteText(null);
+      setNotice('Settings applied.');
+      rendererRef.current?.resetHistory();
+    },
+    [],
+  );
+
+  const savePreset = useCallback(async () => {
+    const blob = new Blob([serializePreset(settings, presetName || 'preset')], {
+      type: 'application/json',
+    });
+    const saved = await saveBlob(blob, `${presetName || 'crtbox'}.crtbox.json`, [
+      { name: 'CRTBOX preset', extensions: ['json'] },
+    ]);
+    if (saved) setNotice(`Preset saved to ${saved}`);
+  }, [settings, presetName]);
+
+  const loadPreset = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      applyPasted(await file.text());
+    };
+    input.click();
+  }, [applyPasted]);
+
+  const triggerDegauss = useCallback(() => {
+    const t = videoRef.current?.currentTime ?? performance.now() / 1000;
+    rendererRef.current?.triggerDegauss(t);
+    engineRef.current.fire('degauss', settingsRef.current['link.degaussToThump'] as number);
+  }, []);
+
+  /* ---------------- export ---------------- */
+
+  const exportRange = useMemo(() => {
+    const end = exportSettings.useSourceRange ? duration : exportSettings.end || duration;
+    const start = exportSettings.useSourceRange ? 0 : exportSettings.start;
+    return { start: Math.max(0, start), end: Math.max(start + 0.01, end) };
+  }, [exportSettings, duration]);
+
+  const snapshot = useCallback(async (): Promise<string | null> => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const blob = await canvasToBlob(canvas);
+    // In batch mode the destination is already known, and there is nobody to
+    // answer a save dialog.
+    if (batchOutputRef.current && desktop) {
+      await desktop.writeFile(batchOutputRef.current, await blob.arrayBuffer());
+      return batchOutputRef.current;
+    }
+    const saved = await saveBlob(blob, `${baseName(media?.name)}-crt.png`, [
+      { name: 'PNG image', extensions: ['png'] },
+    ]);
+    if (saved) setNotice(`Frame saved to ${saved}`);
+    return saved;
+  }, [media]);
+
+  const recordRealtime = useCallback(async () => {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+    if (!engineRef.current.ready) await armAudio();
+
+    setBusy(true);
+    setStatus('Recording in real time…');
+    setProgress(0);
+
+    await seek(video, exportRange.start);
+    const recording = startRecording(canvas, engineRef.current.stream, { fps: exportSettings.fps });
+    await video.play().catch(() => undefined);
+    setPlaying(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (controller.signal.aborted || video.currentTime >= exportRange.end || video.ended) {
+          resolve();
+          return;
+        }
+        setProgress(
+          (video.currentTime - exportRange.start) / Math.max(exportRange.end - exportRange.start, 0.01),
+        );
+        requestAnimationFrame(check);
+      };
+      check();
+    });
+
+    video.pause();
+    setPlaying(false);
+    const blob = await recording.stop();
+    abortRef.current = null;
+
+    const ext = recording.mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const saved = await saveBlob(blob, `${baseName(media?.name)}-crt.${ext}`, [
+      { name: 'Video', extensions: [ext] },
+    ]);
+    setBusy(false);
+    setProgress(0);
+    setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
+  }, [armAudio, exportRange, exportSettings.fps, media]);
+
+  const renderDeterministic = useCallback(async (): Promise<ExportResult> => {
+    const canvas = canvasRef.current;
+    const renderer = rendererRef.current;
+    if (!canvas || !renderer) return { ok: false, error: 'renderer not ready' };
+    let outcome: ExportResult = { ok: true };
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setProgress(0);
+    setStatus('Preparing…');
+
+    // The preview canvas is resized to the output resolution for the duration
+    // of the render, then put back. Rendering at preview size and upscaling
+    // would move the mask pitch and the scanline count relative to the picture,
+    // which is exactly the thing that must not change.
+    const savedW = canvas.width;
+    const savedH = canvas.height;
+    const savedTime = videoRef.current?.currentTime ?? 0;
+    const wasPlaying = playing;
+    videoRef.current?.pause();
+    setPlaying(false);
+
+    try {
+      // Take the dimensions from the decoder, not from whatever the renderer
+      // last happened to see: a hidden window (headless batch mode) never runs
+      // requestAnimationFrame, so the preview loop may not have uploaded a
+      // single frame yet and the renderer would still report its 2x2 placeholder.
+      const video0 = videoRef.current;
+      const image0 = imageRef.current;
+      const src =
+        video0 && video0.videoWidth > 0
+          ? { width: video0.videoWidth, height: video0.videoHeight }
+          : image0 && image0.naturalWidth > 0
+            ? { width: image0.naturalWidth, height: image0.naturalHeight }
+            : renderer.sourceSize;
+      if (src.width < 4 || src.height < 4) {
+        throw new Error('could not determine the source resolution');
+      }
+      const outW = evenize(Math.round(src.width * exportSettings.scale));
+      const outH = evenize(Math.round(src.height * exportSettings.scale));
+      exportingRef.current = true;
+      canvas.width = outW;
+      canvas.height = outH;
+
+      // ---- audio ----
+      let wav: Blob | null = null;
+      if (media?.blob && exportSettings.format !== 'gif') {
+        setStatus('Rendering audio…');
+        const batch = !!batchOutputRef.current;
+        // Offline audio can stall indefinitely on a container with no audio
+        // device, or on a file `decodeAudioData` cannot handle. A silent video
+        // is a far better outcome than an export that never finishes, so the
+        // whole stage is bounded and failure is reported rather than thrown.
+        const buffer = await withTimeout(
+          renderProcessedAudio(media.blob, settingsRef.current, {
+            seed: seedRef.current,
+            start: exportRange.start,
+            end: exportRange.end,
+            onStage: batch ? (stage) => console.info(`audio: ${stage}`) : undefined,
+          }),
+          AUDIO_RENDER_TIMEOUT_MS,
+        ).catch((err) => {
+          const why = err instanceof Error ? err.message : String(err);
+          setNotice(`Audio was not rendered (${why}); exporting the picture only.`);
+          if (batch) console.info(`audio: skipped (${why})`);
+          return null;
+        });
+        if (buffer) wav = encodeWav(buffer, exportSettings.format === 'wav' ? 24 : 16);
+        else if (batch) console.info('audio: none');
+      }
+
+      if (exportSettings.format === 'wav') {
+        if (!wav) throw new Error('no decodable audio track in the source');
+        const saved = await saveBlob(wav, `${baseName(media?.name)}-crt.wav`, [
+          { name: 'WAV audio', extensions: ['wav'] },
+        ]);
+        setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
+        return (outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' });
+      }
+
+      const video = videoRef.current;
+      if (!video || media?.kind !== 'video') {
+        // A still image: one frame is the whole render.
+        renderOnce(0, 0, 1 / exportSettings.fps, true);
+        const saved = await snapshot();
+        return (outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' });
+      }
+
+      // Preflight. An entirely black export is the worst failure mode there is —
+      // it wastes the whole render and still looks like a success — so both the
+      // decode and the render are checked on one frame before committing.
+      await seek(video, exportRange.start);
+      if (
+        video.videoWidth < 2 ||
+        !hasContent(blitToCanvas(video, video.videoWidth, video.videoHeight, blitRef))
+      ) {
+        throw new Error(
+          'the video decoder is not presenting frames — try a different container, or use "Record in real time"',
+        );
+      }
+      renderOnce(exportRange.start, 0, 1 / exportSettings.fps, true);
+      if (!hasContent(canvas)) {
+        throw new Error(
+          'the source decodes but the CRT pipeline rendered a blank frame. This is usually a GPU driver that cannot run the pipeline at the requested output size — try a smaller render scale, or use "Record in real time".',
+        );
+      }
+
+      renderer.resetHistory();
+      const dt = 1 / exportSettings.fps;
+      const total = Math.max(1, Math.round((exportRange.end - exportRange.start) * exportSettings.fps));
+
+      // ---- desktop: stream PNGs into ffmpeg ----
+      if (desktop && exportSettings.format !== 'pngseq') {
+        const ext = exportSettings.format === 'prores' ? 'mov' : exportSettings.format === 'gif' ? 'gif' : 'mp4';
+        const target =
+          batchOutputRef.current ??
+          (await desktop.chooseSavePath(`${baseName(media?.name)}-crt.${ext}`, [
+            { name: 'Video', extensions: [ext] },
+          ]));
+        if (!target) {
+          setStatus('Cancelled.');
+          return (outcome = { ok: false, error: 'cancelled' });
+        }
+        setStatus('Encoding…');
+        if (batchOutputRef.current) console.info(`encoding ${total} frames at ${outW}x${outH} -> ${target}`);
+        const session = await desktop.encodeStart({
+          format: exportSettings.format as 'h264' | 'hevc' | 'prores' | 'gif',
+          fps: exportSettings.fps,
+          quality: exportSettings.quality,
+          outputPath: target,
+          width: outW,
+          height: outH,
+          audio: wav ? await wav.arrayBuffer() : null,
+        });
+
+        for (let i = 0; i < total; i++) {
+          if (controller.signal.aborted) {
+            await desktop.encodeCancel(session.id);
+            setStatus('Cancelled.');
+            return (outcome = { ok: false, error: 'cancelled' });
+          }
+          await seek(video, exportRange.start + i * dt);
+          renderOnce(exportRange.start + i * dt, i, dt, true);
+          const blob = await canvasToBlob(canvas);
+          await desktop.encodeFrame(session.id, await blob.arrayBuffer());
+          setProgress((i + 1) / total);
+          setStatus(`Encoding frame ${i + 1} of ${total}…`);
+          // Batch renders have no UI, so progress goes to the console, which
+          // the main process forwards to stderr.
+          if (batchOutputRef.current) console.info(`frame ${i + 1}/${total}`);
+        }
+
+        const result = await desktop.encodeFinish(session.id);
+        setStatus(result.ok ? `Saved to ${result.outputPath}` : `Error: ${result.error}`);
+        if (result.outputPath && result.ok && !batchOutputRef.current) void desktop.reveal(result.outputPath);
+        return (outcome = result.ok
+          ? { ok: true, outputPath: result.outputPath }
+          : { ok: false, error: result.error ?? 'encoding failed' });
+      }
+
+      // ---- browser (or explicit PNG sequence): zip the frames ----
+      const files: { name: string; data: Uint8Array }[] = [];
+      for (let i = 0; i < total; i++) {
+        if (controller.signal.aborted) {
+          setStatus('Cancelled.');
+          return (outcome = { ok: false, error: 'cancelled' });
+        }
+        await seek(video, exportRange.start + i * dt);
+        renderOnce(exportRange.start + i * dt, i, dt, true);
+        const blob = await canvasToBlob(canvas);
+        files.push({ name: `frames/${padIndex(i)}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+        setProgress((i + 1) / total);
+        setStatus(`Rendering frame ${i + 1} of ${total}…`);
+      }
+
+      setStatus('Packing…');
+      const extra: { name: string; data: Uint8Array }[] = [
+        {
+          name: 'settings.crtbox.json',
+          data: new TextEncoder().encode(serializePreset(settingsRef.current, presetName || undefined)),
+        },
+      ];
+      if (wav) extra.push({ name: 'audio.wav', data: new Uint8Array(await wav.arrayBuffer()) });
+      const zipBlob = await zipFrames(files, extra);
+      const saved = await saveBlob(zipBlob, `${baseName(media?.name)}-crt-frames.zip`, [
+        { name: 'Zip archive', extensions: ['zip'] },
+      ]);
+      setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
+      outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      setStatus(`Error: ${error}`);
+      outcome = { ok: false, error };
+    } finally {
+      exportingRef.current = false;
+      canvas.width = savedW;
+      canvas.height = savedH;
+      fitCanvas();
+      renderer.resetHistory();
+      if (videoRef.current) {
+        await seek(videoRef.current, savedTime);
+        if (wasPlaying) void videoRef.current.play().catch(() => undefined);
+      }
+      abortRef.current = null;
+      setBusy(false);
+      setProgress(0);
+    }
+    return outcome;
+  }, [
+    exportRange,
+    exportSettings,
+    fitCanvas,
+    media,
+    playing,
+    presetName,
+    renderOnce,
+    snapshot,
+  ]);
+
+  // Assigned on every render, so the batch handler always invokes the newest
+  // closure rather than the one that existed when it was registered.
+  const renderRef = useRef(renderDeterministic);
+  renderRef.current = renderDeterministic;
+
+  /* ---------------- headless batch mode ---------------- */
+
+  useEffect(() => {
+    const bridge = desktop;
+    if (!isBatchMode || !bridge) return;
+    bridge.onJob(async (job) => {
+      try {
+        console.info(`job: starting ${job.input} -> ${job.output}`);
+        if (!rendererRef.current) {
+          throw new Error('the WebGL2 renderer failed to start — no usable GPU or software rasteriser');
+        }
+        batchOutputRef.current = job.output;
+        if (job.preset) applyPreset(job.preset);
+        let next = job.preset
+          ? { ...(PRESETS.find((p) => p.id === job.preset)?.settings ?? DEFAULTS) }
+          : { ...DEFAULTS };
+        if (job.settings) next = sanitize((job.settings as { settings?: unknown }).settings ?? job.settings, next);
+        if (job.params) next = sanitize(job.params, next);
+        setSettings(next);
+        settingsRef.current = next;
+        if (typeof job.seed === 'number') {
+          setSeed(job.seed);
+          seedRef.current = job.seed;
+        }
+        setExportSettings((prev) => ({
+          ...prev,
+          format: (job.format as ExportSettings['format']) ?? 'h264',
+          fps: job.fps ?? prev.fps,
+          quality: job.quality ?? prev.quality,
+          scale: job.scale ?? prev.scale,
+          useSourceRange: job.start === undefined && job.end === undefined,
+          start: job.start ?? 0,
+          end: job.end ?? 0,
+        }));
+        await loadMedia({
+          url: `file://${job.input}`,
+          name: job.input.split(/[\\/]/).pop() ?? 'input',
+          kind: /\.(png|jpe?g|webp|gif|bmp)$/i.test(job.input) ? 'image' : 'video',
+          blob: new Blob([await bridge.readFile(job.input)]),
+          path: job.input,
+        });
+        console.info(`job: loaded ${job.input}`);
+        // The media has to be decodable, and React has to have committed the
+        // render that knows about it, before the export callback is meaningful.
+        await waitFor(() => (videoRef.current?.readyState ?? 0) >= 2 || !!imageRef.current, 30_000);
+        await waitFor(
+          () =>
+            mediaRef.current?.path === job.input &&
+            (mediaRef.current.kind === 'image' || durationRef.current > 0),
+          30_000,
+        );
+        console.info(`job: media ready, ${durationRef.current.toFixed(2)}s`);
+        const result = await renderRef.current();
+        console.info(`job: ${result.ok ? 'done' : `failed — ${result.error}`}`);
+        bridge.jobDone(result.ok ? { ok: true, outputPath: job.output } : result);
+      } catch (err) {
+        bridge.jobDone({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+    bridge.jobReady();
+  }, [applyPreset, loadMedia]);
+
+  /* ---------------- keyboard ---------------- */
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        void togglePlay();
+      } else if (e.key === 'd' || e.key === 'D') {
+        triggerDegauss();
+      } else if (e.key === 'r' || e.key === 'R') {
+        doRandomize();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [doRandomize, togglePlay, triggerDegauss]);
+
+  /* ---------------- render ---------------- */
+
+  const groups = GROUPS.filter((g) =>
+    tab === 'video' ? g.kind === 'video' : tab === 'audio' ? g.kind === 'audio' : g.kind === 'link',
+  );
+
+  const modifiedCount = useMemo(
+    () => Object.keys(DEFAULTS).filter((k) => settings[k] !== DEFAULTS[k]).length,
+    [settings],
+  );
+
+  if (glError) {
+    return (
+      <div className="fatal">
+        <h1>CRTBOX</h1>
+        <p>{glError}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`app${isBatchMode ? ' batch' : ''}`}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="logo">▚</span>
+          <span className="name">CRTBOX</span>
+          <span className="tagline">cathode-ray emulation for picture and sound</span>
+        </div>
+
+        <div className="topbar-actions">
+          <button className="primary" onClick={openViaDialog}>
+            Open media…
+          </button>
+
+          <select
+            value={presetName}
+            onChange={(e) => applyPreset(e.target.value)}
+            title="Built-in presets"
+          >
+            <option value="">— custom —</option>
+            {PRESETS.map((p) => (
+              <option key={p.id} value={p.id} title={p.description}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+
+          <button onClick={copySettings} title="Copy the current settings to the clipboard as JSON">
+            Copy
+          </button>
+          <button onClick={() => setPasteText('')} title="Paste settings JSON">
+            Paste
+          </button>
+          <button onClick={savePreset}>Save…</button>
+          <button onClick={loadPreset}>Load…</button>
+
+          <span className="divider" />
+
+          <button onClick={doRandomize} title="Randomise the current tab (R)">
+            Randomise
+          </button>
+          <label className="inline" title="How far each roll moves from the current settings">
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.01}
+              value={randomAmount}
+              onChange={(e) => setRandomAmount(Number(e.target.value))}
+            />
+          </label>
+          <label className="inline seed" title="Seed for noise and randomisation">
+            seed
+            <input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(Number(e.target.value) || 0)}
+            />
+          </label>
+
+          <label className="inline" title="Show the fine-detail parameters">
+            <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
+            Advanced
+          </label>
+        </div>
+      </header>
+
+      <div className="body">
+        <aside className="sidebar">
+          <nav className="tabs">
+            {(['video', 'audio', 'link'] as Tab[]).map((t) => (
+              <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
+                {t === 'video' ? 'Picture' : t === 'audio' ? 'Sound' : 'A/V Link'}
+              </button>
+            ))}
+          </nav>
+
+          <div className="groups">
+            {groups.map((g) => (
+              <GroupPanel
+                key={g.id}
+                group={g}
+                settings={settings}
+                advanced={advanced}
+                open={!!openGroups[g.id]}
+                onToggleOpen={(id) => setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }))}
+                onChange={change}
+                onReset={(id) => setSettings((prev) => resetGroup(prev, id))}
+              />
+            ))}
+          </div>
+
+          <footer className="sidebar-foot">
+            <span>{modifiedCount} parameters changed</span>
+            <button
+              className="ghost"
+              onClick={() => {
+                setSettings({ ...DEFAULTS });
+                setPresetName('');
+              }}
+            >
+              Reset all
+            </button>
+          </footer>
+        </aside>
+
+        <main className="main">
+          <div className="stage" ref={stageRef}>
+            <canvas ref={canvasRef} />
+            {!media && (
+              <div className="dropzone">
+                <p>Drop a video or an image here</p>
+                <button className="primary" onClick={openViaDialog}>
+                  Open media…
+                </button>
+                <p className="muted">
+                  Nothing is uploaded anywhere — decoding, processing and export all happen on this
+                  machine.
+                </p>
+              </div>
+            )}
+            {media?.kind === 'video' && !audioArmed && (
+              <button className="arm-audio" onClick={armAudio} title="Connect the audio chain">
+                Enable audio
+              </button>
+            )}
+          </div>
+
+          <div className="transport">
+            <button className="play" onClick={togglePlay} disabled={media?.kind !== 'video'}>
+              {playing ? '❚❚' : '▶'}
+            </button>
+            <span className="time">{formatTime(currentTime)}</span>
+            <input
+              className="scrub"
+              type="range"
+              min={0}
+              max={Math.max(duration, 0.01)}
+              step={0.01}
+              value={currentTime}
+              disabled={media?.kind !== 'video'}
+              onChange={(e) => {
+                const t = Number(e.target.value);
+                setCurrentTime(t);
+                if (videoRef.current) videoRef.current.currentTime = t;
+                rendererRef.current?.resetHistory();
+              }}
+            />
+            <span className="time">{formatTime(duration)}</span>
+
+            <label className="inline" title="Loop playback">
+              <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
+              loop
+            </label>
+
+            <span className="divider" />
+
+            <label className="inline split" title="Drag to reveal the untouched source on the left">
+              split
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.001}
+                value={split}
+                onChange={(e) => setSplit(Number(e.target.value))}
+              />
+            </label>
+
+            <button onClick={triggerDegauss} title="Fire the degauss coil (D)">
+              Degauss
+            </button>
+          </div>
+
+          <section className="dock">
+            <h2>Export</h2>
+            <ExportPanel
+              value={exportSettings}
+              duration={duration}
+              busy={busy}
+              progress={progress}
+              status={status}
+              onChange={setExportSettings}
+              onRenderDeterministic={renderDeterministic}
+              onRecordRealtime={recordRealtime}
+              onSnapshot={snapshot}
+              onCancel={() => abortRef.current?.abort()}
+            />
+          </section>
+        </main>
+      </div>
+
+      {notice && (
+        <div className="toast" onClick={() => setNotice('')}>
+          {notice}
+        </div>
+      )}
+
+      {pasteText !== null && (
+        <div className="modal" onClick={() => setPasteText(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <h3>Settings JSON</h3>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              spellCheck={false}
+              placeholder='{"tube.humBar": 0.4, "noise.flybackLevel": -38}'
+            />
+            <div className="row">
+              <button className="primary" onClick={() => applyPasted(pasteText)}>
+                Apply
+              </button>
+              <button onClick={() => setPasteText(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/*
+        Decoders. These are kept out of sight but deliberately NOT `display: none`:
+        a display-none media element is not guaranteed to present frames, and
+        texImage2D then uploads black. A 1x1 transparent element off in the
+        corner keeps the decoder producing frames while staying invisible.
+      */}
+      {media?.kind === 'video' && (
+        <video
+          ref={videoRef}
+          src={media.url}
+          loop={loop}
+          playsInline
+          crossOrigin="anonymous"
+          style={HIDDEN_MEDIA}
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            setDuration(v.duration || 0);
+            setExportSettings((prev) => ({ ...prev, end: prev.end || v.duration || 0 }));
+          }}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onSeeking={() => rendererRef.current?.resetHistory()}
+        />
+      )}
+      {media?.kind === 'image' && (
+        <img
+          ref={imageRef}
+          src={media.url}
+          alt=""
+          style={HIDDEN_MEDIA}
+          onLoad={() => rendererRef.current?.resetHistory()}
+        />
+      )}
+    </div>
+  );
+}
+
+const HIDDEN_MEDIA: CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  bottom: 0,
+  width: 1,
+  height: 1,
+  opacity: 0,
+  pointerEvents: 'none',
+  zIndex: -1,
+};
+
+function formatTime(t: number): string {
+  if (!Number.isFinite(t)) return '0:00';
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function baseName(name?: string): string {
+  return (name ?? 'crtbox').replace(/\.[^.]+$/, '');
+}
+
+/** yuv420p needs both dimensions even; ProRes prefers it too. */
+function evenize(n: number): number {
+  return Math.max(2, n % 2 === 0 ? n : n + 1);
+}
+
+/** Offline audio rendering is bounded so a stalled decoder cannot hang an export. */
+const AUDIO_RENDER_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`timed out after ${Math.round(ms / 1000)}s`)), ms),
+    ),
+  ]);
+}
+
+/**
+ * True when drawing the element yields something other than a uniform frame.
+ *
+ * `readyState >= HAVE_CURRENT_DATA` only promises the *demuxer* has data; it
+ * says nothing about whether the compositor is presenting decoded frames, which
+ * is the thing texture upload actually depends on.
+ */
+/** Copy a media element into a reusable 2D canvas for texture upload. */
+function blitToCanvas(
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+  ref: { current: HTMLCanvasElement | null },
+): HTMLCanvasElement {
+  let canvas = ref.current;
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    ref.current = canvas;
+  }
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx?.drawImage(source, 0, 0, width, height);
+  return canvas;
+}
+
+/**
+ * True when a canvas holds something other than a flat, near-black field.
+ *
+ * A genuinely black frame is possible — a title card, a fade — but it cannot be
+ * told apart from "nothing was drawn at all", so only a frame with essentially
+ * no variation *and* no brightness counts as a failure.
+ */
+function hasContent(source: HTMLCanvasElement): boolean {
+  try {
+    const probe = document.createElement('canvas');
+    probe.width = 48;
+    probe.height = 48;
+    const ctx = probe.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return true;   // cannot tell; assume the best rather than block
+    ctx.drawImage(source, 0, 0, probe.width, probe.height);
+    const { data } = ctx.getImageData(0, 0, probe.width, probe.height);
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      if (l < min) min = l;
+      if (l > max) max = l;
+    }
+    return max - min > 6 || max > 24;
+  } catch {
+    return true;
+  }
+}
+
+function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = performance.now();
+    const check = () => {
+      if (predicate()) resolve();
+      else if (performance.now() - started > timeoutMs) reject(new Error('timed out waiting for media'));
+      else setTimeout(check, 50);
+    };
+    check();
+  });
+}
