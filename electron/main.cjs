@@ -198,6 +198,26 @@ function parseCli(argv) {
   return job.input && job.output ? job : job.help ? job : null;
 }
 
+/**
+ * A media path given as a bare argument, e.g. from "Open with CRTBOX" or from
+ * dropping a file onto the exe. Distinct from the render CLI, which needs both
+ * --input and --output.
+ */
+function initialFileFromArgv(argv) {
+  const args = argv.slice(app.isPackaged ? 1 : 2);
+  for (const a of args) {
+    if (a.startsWith('-')) continue;
+    // Electron itself passes flags and, unpackaged, the app directory.
+    if (a === '.' || a === __dirname) continue;
+    try {
+      if (fs.existsSync(a) && fs.statSync(a).isFile()) return path.resolve(a);
+    } catch {
+      /* not a path we can use */
+    }
+  }
+  return null;
+}
+
 function coerceCli(v) {
   if (v === 'true') return true;
   if (v === 'false') return false;
@@ -239,7 +259,7 @@ function loadApp(win, query) {
   return win.loadFile(INDEX_HTML, search ? { search } : undefined);
 }
 
-function createWindow() {
+function createWindow(initialFile) {
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 940,
@@ -247,6 +267,11 @@ function createWindow() {
     minHeight: 660,
     backgroundColor: '#0a0b0c',
     title: 'CRTBOX',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    // Nothing is painted until the renderer has something to show, so the
+    // window appears complete rather than as a white rectangle that then
+    // turns dark.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -254,11 +279,34 @@ function createWindow() {
       sandbox: false,
     },
   });
+
+  mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (initialFile) sendOpenFile(initialFile);
+  });
+
   loadApp(mainWindow);
   return mainWindow;
+}
+
+function sendOpenFile(filePath) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('app:openFile', {
+    path: filePath,
+    name: path.basename(filePath),
+    url: pathToUrl(filePath),
+  });
+}
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 function log(message) {
@@ -377,6 +425,31 @@ function pathToUrl(p) {
 
 const cliJob = parseCli(process.argv);
 
+/** A file to open once the window exists — from argv, or from macOS. */
+let pendingFile = cliJob ? null : initialFileFromArgv(process.argv);
+
+// Double-clicking a second file should reuse the open window rather than
+// starting a second copy of the application.
+if (!cliJob && !app.requestSingleInstanceLock()) {
+  app.quit();
+} else if (!cliJob) {
+  app.on('second-instance', (_event, argv) => {
+    const file = initialFileFromArgv(argv);
+    focusMainWindow();
+    if (file) sendOpenFile(file);
+  });
+  // macOS delivers files through an event rather than through argv.
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    if (mainWindow) {
+      focusMainWindow();
+      sendOpenFile(filePath);
+    } else {
+      pendingFile = filePath;
+    }
+  });
+}
+
 if (cliJob && !cliJob.help) {
   // Batch rendering is aimed at build machines and render farms, which usually
   // have no GPU at all. Opt into the software rasteriser up front rather than
@@ -417,9 +490,12 @@ if (cliJob && cliJob.help) {
       return;
     }
 
-    createWindow();
+    createWindow(pendingFile);
+    pendingFile = null;
+
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createWindow(null);
+      else focusMainWindow();
     });
   });
 

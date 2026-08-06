@@ -86,24 +86,56 @@ is rendered offline through the identical DSP chain and muxed by a bundled ffmpe
 
 ---
 
-## Install
+## Get it (Windows)
 
-### Desktop (recommended)
+Go to **[Releases](../../releases/latest)** and pick one:
 
-Grab a build from the releases page, or build it yourself:
+| | |
+|---|---|
+| **`CRTBOX-…-Setup.exe`** | Double-click. It installs itself with no wizard, puts a shortcut on your desktop and in the Start Menu, and opens. Nothing to configure. |
+| **`CRTBOX-…-Portable.exe`** | One file. Double-click and the app opens. Nothing is installed and nothing is left behind. |
+
+Either way it is a single click to run. The app is not code-signed, so the first
+time you open it Windows shows **"Windows protected your PC"** — click
+**More info → Run anyway**. That warning is SmartScreen not recognising an
+unsigned publisher, and it stops appearing afterwards.
+
+Once installed you can also right-click any video and choose **Open with →
+CRTBOX**, or drag a file onto the app icon.
+
+### macOS and Linux
+
+`.dmg`, `.AppImage` and `.deb` builds come from the same configuration:
 
 ```bash
 npm install
-npm run dist          # current platform
-npm run dist:all      # macOS, Windows and Linux
+npm run dist:mac      # or dist:linux
 ```
 
-Output lands in `release/`. The optional `ffmpeg-static` dependency provides the bundled
-encoder; without it the app still runs and still exports WebM, PNG sequences and WAV — the
-`.mp4` / `.mov` / GIF targets are simply hidden. Point `CRTBOX_FFMPEG` at a binary to use
-your own.
+### Building the Windows app yourself
+
+```bash
+npm install
+npm run dist:win      # -> release/CRTBOX-<version>-Setup.exe
+                      #    release/CRTBOX-<version>-Portable.exe
+```
+
+**Run this on Windows.** Two things break otherwise: editing the exe's icon and
+version resources needs native tooling (or wine), and `ffmpeg-static` installs
+the binary for whatever platform npm ran on — building on Linux quietly ships a
+Linux `ffmpeg` inside a Windows app, which removes the .mp4/.mov/GIF export
+targets at runtime. `.github/workflows/windows.yml` builds on a Windows runner
+and checks for exactly that.
+
+To sanity-check the packaging from any OS (no wine, no installer):
+
+```bash
+npm run pack:win      # -> release/win-unpacked/CRTBOX.exe
+```
 
 ### Web
+
+The same app runs in a browser with no install at all:
 
 ```bash
 npm install
@@ -112,8 +144,8 @@ npm run build         # static bundle in dist/
 ```
 
 Needs WebGL2 and AudioWorklet. Any current Chromium, Firefox or Safari will do.
-
----
+The browser version can export WebM, PNG sequences and WAV; the desktop build
+adds .mp4/.mov/GIF through a bundled ffmpeg.
 
 ## Command line
 
@@ -152,6 +184,8 @@ the keys that appear in exported preset JSON. `crtbox --help` lists the rest.
 ## Development
 
 ```
+build/                    generated app icons (npm run icon)
+.github/workflows/        CI, and the Windows installer build
 src/core/params.ts        the parameter schema — single source of truth for the
                           UI, the shader uniforms, the DSP, presets and CLI flags
 src/video/                WebGL2 pipeline: signal → persistence → burn-in →
@@ -168,7 +202,9 @@ scripts/shots.mjs         render preset stills for eyeballing
 ```bash
 npm run typecheck
 npm run build
-node scripts/smoke.mjs     # after a build
+npm run smoke          # after a build
+npm test               # all three
+npm run icon           # regenerate build/icon.ico and build/icon.png
 ```
 
 `tsc` cannot catch a shader that fails to compile or a worklet that fails to register, which

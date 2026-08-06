@@ -44,6 +44,7 @@ export interface DesktopBridge {
   writeFile(filePath: string, data: ArrayBuffer): Promise<string>;
   readFile(filePath: string): Promise<ArrayBuffer>;
   reveal(filePath: string): Promise<void>;
+  onOpenFile?(handler: (file: OpenedMedia) => void): void;
   ffmpegAvailable(): Promise<boolean>;
   encodeStart(opts: EncodeStartOptions): Promise<{ id: string; outputPath: string }>;
   encodeFrame(id: string, data: ArrayBuffer): Promise<boolean>;

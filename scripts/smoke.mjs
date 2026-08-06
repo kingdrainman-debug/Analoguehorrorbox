@@ -21,6 +21,7 @@
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,8 +54,12 @@ const port = await new Promise((resolve) => {
 });
 
 const failures = [];
+// Use an explicit binary when one is provided or present, otherwise let
+// playwright resolve the browser it installed. Keeps this runnable both in the
+// dev container and on a CI runner.
+const explicitChromium = process.env.CRTBOX_CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const browser = await chromium.launch({
-  executablePath: process.env.CRTBOX_CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+  ...(existsSync(explicitChromium) ? { executablePath: explicitChromium } : {}),
   args: [
     '--use-gl=angle',
     '--use-angle=swiftshader',

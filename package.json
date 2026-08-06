@@ -19,7 +19,12 @@
     "dist:all": "npm run build && electron-builder -mwl",
     "smoke": "node scripts/smoke.mjs",
     "shots": "node scripts/shots.mjs",
-    "test": "npm run typecheck && npm run build && npm run smoke"
+    "test": "npm run typecheck && npm run build && npm run smoke",
+    "icon": "node scripts/make-icon.mjs",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "pack:win": "npm run build && electron-builder --win dir --x64"
   },
   "dependencies": {
     "fflate": "^0.8.2",
@@ -43,8 +48,10 @@
   "build": {
     "appId": "rs.crtbox.app",
     "productName": "CRTBOX",
+    "copyright": "Copyright \u00a9 2026 CRTBOX contributors",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
@@ -54,25 +61,58 @@
     "asarUnpack": [
       "**/node_modules/ffmpeg-static/**"
     ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "CRTBOX",
+      "uninstallDisplayName": "CRTBOX"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}",
+      "unicode": true
+    },
     "mac": {
+      "icon": "build/icon.png",
       "category": "public.app-category.video",
       "target": [
         "dmg",
         "zip"
       ]
     },
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ]
-    },
     "linux": {
+      "icon": "build/icon.png",
       "category": "AudioVideo",
       "target": [
         "AppImage",
         "deb"
       ]
     }
+  },
+  "author": {
+    "name": "CRTBOX contributors"
   }
 }

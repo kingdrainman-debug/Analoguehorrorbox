@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld('crtbox', {
   readFile: (filePath) => ipcRenderer.invoke('fs:read', filePath),
   reveal: (filePath) => ipcRenderer.invoke('shell:reveal', filePath),
 
+  // Fired when the app is launched with a media file, or when a second launch
+  // hands one to the window that is already open.
+  onOpenFile: (handler) => {
+    ipcRenderer.on('app:openFile', (_e, file) => handler(file));
+  },
+
   ffmpegAvailable: () => ipcRenderer.invoke('ffmpeg:available'),
   encodeStart: (opts) => ipcRenderer.invoke('encode:start', opts),
   encodeFrame: (id, data) => ipcRenderer.invoke('encode:frame', id, data),

@@ -279,6 +279,27 @@ export default function App() {
     input.click();
   }, [loadMedia, openFile]);
 
+  /** Open a file the desktop shell handed us — launch argument, or "Open with". */
+  const openFromPath = useCallback(
+    async (file: { path: string; name: string; url: string }) => {
+      const kind = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name) ? 'image' : 'video';
+      let blob: Blob | null = null;
+      try {
+        blob = new Blob([await desktop!.readFile(file.path)]);
+      } catch {
+        // Without the bytes the picture still works; only audio export needs them.
+        blob = null;
+      }
+      await loadMedia({ url: file.url, name: file.name, kind, blob, path: file.path });
+    },
+    [loadMedia],
+  );
+
+  useEffect(() => {
+    if (!desktop?.onOpenFile || isBatchMode) return;
+    desktop.onOpenFile((file) => void openFromPath(file));
+  }, [openFromPath]);
+
   useEffect(() => {
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
