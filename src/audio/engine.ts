@@ -87,6 +87,12 @@ export interface ChainOptions {
   seed: number;
   /** Skip the analyser in offline renders — nothing reads it. */
   withAnalyser?: boolean;
+  /**
+   * Mute the output while transport is paused. On for the live preview, off for
+   * offline rendering, where there is no transport to pause and gating would
+   * simply export silence.
+   */
+  gateOnPause?: boolean;
 }
 
 export interface AudioChain {
@@ -261,6 +267,11 @@ export async function buildChain(
   roomSum.connect(master);
   master.connect(limiter);
 
+  const gateOnPause = opts.gateOnPause !== false;
+  // Start closed when gating, so arming the chain over a paused clip does not
+  // blip a frame of hum before the first update closes it.
+  master.gain.value = gateOnPause ? 0 : 1;
+
   let analyser: AnalyserNode | null = null;
   let levelBuf = new Float32Array(1024);
   let smoothedLevel = 0;
@@ -417,7 +428,17 @@ export async function buildChain(
       set(limiter.threshold, num(s, 'dynamics.ceiling'));
     }
 
-    set(master.gain, 1);
+  // Pause has to silence everything, not just the programme. The noise bed —
+    // hum, hiss, flyback whine, crackle — is generated in the worklets and
+    // free-runs regardless of whether anything is playing, so muting the source
+    // alone would leave a television humming away over a frozen picture.
+    // A short ramp rather than a hard cut, or pausing clicks.
+    if (gateOnPause) {
+      const gate = tel.playing ? 1 : 0;
+      if (Math.abs(master.gain.value - gate) > 1e-4) {
+        master.gain.setTargetAtTime(gate, t, 0.012);
+      }
+    }
 
     // ---- worklets ----
     const wp = workletParams(s);

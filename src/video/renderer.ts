@@ -142,18 +142,30 @@ export class CrtRenderer {
     return u;
   }
 
-  /** Upload one frame of source material. */
+  /**
+   * Upload one frame of source material.
+   *
+   * This always reallocates with texImage2D rather than updating in place with
+   * texSubImage2D, which looks wasteful and is not: uploading a <video> through
+   * texSubImage2D silently writes nothing at all. The call succeeds, glGetError
+   * stays clean, and the texture keeps whatever it held before — so the picture
+   * is black forever while the element happily reports readyState 4 and hands
+   * correct frames to drawImage. An <img> updates fine either way, which is why
+   * still images worked and video did not.
+   *
+   * texImage2D(video) is the path browsers optimise for, so the reallocation
+   * costs far less than the name suggests.
+   */
   setSource(source: TexImageSource | null, width: number, height: number): void {
     const gl = this.gl;
     if (!source || width < 1 || height < 1) return;
+    // Bind to a known unit; without this the upload lands on whichever unit the
+    // previous pass happened to leave active.
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
-    if (width !== this.srcWidth || height !== this.srcHeight) {
-      this.srcWidth = width;
-      this.srcHeight = height;
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    }
+    this.srcWidth = width;
+    this.srcHeight = height;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
   }
 
   get sourceSize(): { width: number; height: number } {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { isDesktop } from '../platform/desktop';
+import { describeDuration, formatTimecode, parseTimecode } from '../core/time';
 
 export type ExportFormat = 'h264' | 'hevc' | 'prores' | 'gif' | 'webm' | 'pngseq' | 'wav';
 
@@ -11,6 +12,8 @@ export interface ExportSettings {
   start: number;
   end: number;
   useSourceRange: boolean;
+  /** How long a still image runs for when it is rendered as a clip. */
+  stillDuration: number;
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
@@ -21,11 +24,14 @@ export const DEFAULT_EXPORT: ExportSettings = {
   start: 0,
   end: 0,
   useSourceRange: true,
+  stillDuration: 10,
 };
 
 interface Props {
   value: ExportSettings;
   duration: number;
+  /** The loaded media is a still image, so the clip length is chosen not read. */
+  isStill: boolean;
   busy: boolean;
   progress: number;
   status: string;
@@ -46,9 +52,53 @@ const FORMATS: { value: ExportFormat; label: string; desktopOnly?: boolean; hint
   { value: 'wav', label: 'Audio only · .wav', hint: 'Renders the audio chain offline at 48 kHz / 24-bit.' },
 ];
 
+/** A text field that reads and writes h:mm:ss.s but stores plain seconds. */
+function TimeField({
+  label,
+  seconds,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  seconds: number;
+  disabled?: boolean;
+  onCommit(value: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? formatTimecode(seconds);
+
+  const commit = (text: string) => {
+    const parsed = parseTimecode(text);
+    // Unparseable input keeps the old value rather than snapping to zero.
+    if (parsed !== null) onCommit(parsed);
+    setDraft(null);
+  };
+
+  return (
+    <label className="field time">
+      <span>{label}</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={shown}
+        disabled={disabled}
+        placeholder="0:00.0"
+        title="h:mm:ss.s — or just a number of seconds"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') setDraft(null);
+        }}
+      />
+    </label>
+  );
+}
+
 export function ExportPanel({
   value,
   duration,
+  isStill,
   busy,
   progress,
   status,
@@ -76,9 +126,8 @@ export function ExportPanel({
   const realtime = value.format === 'webm';
   const audioOnly = value.format === 'wav';
 
-  const start = value.useSourceRange ? 0 : value.start;
-  const end = value.useSourceRange ? duration : value.end;
-  const frames = Math.max(1, Math.round((end - start) * value.fps));
+  const start = isStill ? 0 : value.useSourceRange ? 0 : value.start;
+  const end = isStill ? value.stillDuration : value.useSourceRange ? duration : value.end;
 
   return (
     <div className="export">
@@ -146,7 +195,23 @@ export function ExportPanel({
 
       {active && <p className="export-hint">{active.hint}</p>}
 
-      {duration > 0 && !audioOnly && (
+      {isStill && !audioOnly && (
+        <div className="row">
+          <TimeField
+            label="Clip length"
+            seconds={value.stillDuration}
+            disabled={busy}
+            onCommit={(v) => set('stillDuration', Math.max(0.1, Math.min(3600, v)))}
+          />
+          <span className="range-note">
+            The still is held for this long while the effects run over it — drift,
+            hum bar, snow, wobble — so the result is a moving picture rather than a
+            frozen frame.
+          </span>
+        </div>
+      )}
+
+      {!isStill && duration > 0 && !audioOnly && (
         <div className="row">
           <label className="field check">
             <input
@@ -159,33 +224,23 @@ export function ExportPanel({
           </label>
           {!value.useSourceRange && (
             <>
-              <label className="field small">
-                <span>In</span>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  max={duration}
-                  value={value.start}
-                  onChange={(e) => set('start', Number(e.target.value) || 0)}
-                  disabled={busy}
-                />
-              </label>
-              <label className="field small">
-                <span>Out</span>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  max={duration}
-                  value={value.end}
-                  onChange={(e) => set('end', Number(e.target.value) || 0)}
-                  disabled={busy}
-                />
-              </label>
+              <TimeField
+                label="In"
+                seconds={value.start}
+                disabled={busy}
+                onCommit={(v) => set('start', Math.max(0, Math.min(duration, v)))}
+              />
+              <TimeField
+                label="Out"
+                seconds={value.end}
+                disabled={busy}
+                onCommit={(v) => set('end', Math.max(0, Math.min(duration, v)))}
+              />
             </>
           )}
-          <span className="frames">{frames} frames</span>
+          <span className="range-note">
+            Length {describeDuration(Math.max(0, end - start))}
+          </span>
         </div>
       )}
 
@@ -211,7 +266,7 @@ export function ExportPanel({
             <button
               className="primary"
               onClick={realtime ? onRecordRealtime : onRenderDeterministic}
-              disabled={duration <= 0 && !audioOnly}
+              disabled={duration <= 0 && !audioOnly && !isStill}
             >
               {realtime ? 'Record in real time' : audioOnly ? 'Render audio' : 'Render'}
             </button>

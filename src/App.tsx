@@ -1,4 +1,4 @@
-import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULTS,
   GROUPS,
@@ -430,11 +430,16 @@ export default function App() {
 
   /* ---------------- export ---------------- */
 
+  const isStill = media?.kind === 'image';
+
   const exportRange = useMemo(() => {
+    // A still has no timeline of its own, so its length is whatever the user
+    // asked for rather than something read off the file.
+    if (isStill) return { start: 0, end: Math.max(0.1, exportSettings.stillDuration) };
     const end = exportSettings.useSourceRange ? duration : exportSettings.end || duration;
     const start = exportSettings.useSourceRange ? 0 : exportSettings.start;
     return { start: Math.max(0, start), end: Math.max(start + 0.01, end) };
-  }, [exportSettings, duration]);
+  }, [exportSettings, duration, isStill]);
 
   const snapshot = useCallback(async (): Promise<string | null> => {
     const canvas = canvasRef.current;
@@ -546,7 +551,7 @@ export default function App() {
 
       // ---- audio ----
       let wav: Blob | null = null;
-      if (media?.blob && exportSettings.format !== 'gif') {
+      if ((media?.blob || isStill) && exportSettings.format !== 'gif') {
         setStatus('Rendering audio…');
         const batch = !!batchOutputRef.current;
         // Offline audio can stall indefinitely on a container with no audio
@@ -554,10 +559,11 @@ export default function App() {
         // is a far better outcome than an export that never finishes, so the
         // whole stage is bounded and failure is reported rather than thrown.
         const buffer = await withTimeout(
-          renderProcessedAudio(media.blob, settingsRef.current, {
+          renderProcessedAudio(isStill ? null : media?.blob ?? null, settingsRef.current, {
             seed: seedRef.current,
             start: exportRange.start,
             end: exportRange.end,
+            duration: exportRange.end - exportRange.start,
             onStage: batch ? (stage) => console.info(`audio: ${stage}`) : undefined,
           }),
           AUDIO_RENDER_TIMEOUT_MS,
@@ -581,24 +587,22 @@ export default function App() {
       }
 
       const video = videoRef.current;
-      if (!video || media?.kind !== 'video') {
-        // A still image: one frame is the whole render.
-        renderOnce(0, 0, 1 / exportSettings.fps, true);
-        const saved = await snapshot();
-        return (outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' });
-      }
+      const image = imageRef.current;
+      if (!video && !image) throw new Error('nothing is loaded');
 
       // Preflight. An entirely black export is the worst failure mode there is —
       // it wastes the whole render and still looks like a success — so both the
       // decode and the render are checked on one frame before committing.
-      await seek(video, exportRange.start);
-      if (
-        video.videoWidth < 2 ||
-        !hasContent(blitToCanvas(video, video.videoWidth, video.videoHeight, blitRef))
-      ) {
-        throw new Error(
-          'the video decoder is not presenting frames — try a different container, or use "Record in real time"',
-        );
+      if (video) {
+        await seek(video, exportRange.start);
+        if (
+          video.videoWidth < 2 ||
+          !hasContent(blitToCanvas(video, video.videoWidth, video.videoHeight, blitRef))
+        ) {
+          throw new Error(
+            'the video decoder is not presenting frames — try a different container, or use "Record in real time"',
+          );
+        }
       }
       renderOnce(exportRange.start, 0, 1 / exportSettings.fps, true);
       if (!hasContent(canvas)) {
@@ -610,6 +614,15 @@ export default function App() {
       renderer.resetHistory();
       const dt = 1 / exportSettings.fps;
       const total = Math.max(1, Math.round((exportRange.end - exportRange.start) * exportSettings.fps));
+
+      // A still has nothing to seek — the clock still advances, so every
+      // time-varying effect (drift, hum bar, snow, jitter) animates over it and
+      // the output is a moving picture rather than a repeated frame.
+      const stepTo = async (i: number) => {
+        const t = exportRange.start + i * dt;
+        if (video) await seek(video, t);
+        renderOnce(t, i, dt, true);
+      };
 
       // ---- desktop: stream PNGs into ffmpeg ----
       if (desktop && exportSettings.format !== 'pngseq') {
@@ -641,8 +654,7 @@ export default function App() {
             setStatus('Cancelled.');
             return (outcome = { ok: false, error: 'cancelled' });
           }
-          await seek(video, exportRange.start + i * dt);
-          renderOnce(exportRange.start + i * dt, i, dt, true);
+          await stepTo(i);
           const blob = await canvasToBlob(canvas);
           await desktop.encodeFrame(session.id, await blob.arrayBuffer());
           setProgress((i + 1) / total);
@@ -667,8 +679,7 @@ export default function App() {
           setStatus('Cancelled.');
           return (outcome = { ok: false, error: 'cancelled' });
         }
-        await seek(video, exportRange.start + i * dt);
-        renderOnce(exportRange.start + i * dt, i, dt, true);
+        await stepTo(i);
         const blob = await canvasToBlob(canvas);
         files.push({ name: `frames/${padIndex(i)}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
         setProgress((i + 1) / total);
@@ -933,6 +944,58 @@ export default function App() {
 
         <main className="main">
           <div className="stage" ref={stageRef}>
+            {/*
+              The decoders live inside the stage, at full size, *behind* the
+              canvas — not hidden.
+
+              Chromium does not present frames for a <video> that is
+              effectively invisible: `display: none`, zero size and
+              `opacity: 0` all produce an element that reports readyState 4
+              and advances currentTime while handing drawImage and
+              texImage2D nothing but black. An <img> decodes regardless of
+              layout, which is why stills kept working when video did not.
+
+              So the video is genuinely rendered and genuinely occluded: the
+              canvas above it is opaque (the context is created with
+              alpha: false) and covers the stage completely.
+            */}
+            {media?.kind === 'video' && (
+              <video
+                ref={videoRef}
+                className="decoder"
+                src={media.url}
+                loop={loop}
+                playsInline
+                preload="auto"
+                crossOrigin="anonymous"
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  setDuration(v.duration || 0);
+                  setExportSettings((prev) => ({ ...prev, end: prev.end || v.duration || 0 }));
+                }}
+                onLoadedData={(e) => {
+                  // A video that has loaded but never played may not have
+                  // *presented* a frame, so the tube would sit black until the
+                  // user pressed play. A nudge off zero forces one out.
+                  const v = e.currentTarget;
+                  if (v.paused && v.currentTime === 0) {
+                    v.currentTime = Math.min(0.04, (v.duration || 1) * 0.01);
+                  }
+                }}
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onSeeking={() => rendererRef.current?.resetHistory()}
+              />
+            )}
+            {media?.kind === 'image' && (
+              <img
+                ref={imageRef}
+                className="decoder"
+                src={media.url}
+                alt=""
+                onLoad={() => rendererRef.current?.resetHistory()}
+              />
+            )}
             <canvas ref={canvasRef} />
             {!media && (
               <div className="dropzone">
@@ -1004,6 +1067,7 @@ export default function App() {
             <ExportPanel
               value={exportSettings}
               duration={duration}
+              isStill={isStill}
               busy={busy}
               progress={progress}
               status={status}
@@ -1043,53 +1107,9 @@ export default function App() {
         </div>
       )}
 
-      {/*
-        Decoders. These are kept out of sight but deliberately NOT `display: none`:
-        a display-none media element is not guaranteed to present frames, and
-        texImage2D then uploads black. A 1x1 transparent element off in the
-        corner keeps the decoder producing frames while staying invisible.
-      */}
-      {media?.kind === 'video' && (
-        <video
-          ref={videoRef}
-          src={media.url}
-          loop={loop}
-          playsInline
-          crossOrigin="anonymous"
-          style={HIDDEN_MEDIA}
-          onLoadedMetadata={(e) => {
-            const v = e.currentTarget;
-            setDuration(v.duration || 0);
-            setExportSettings((prev) => ({ ...prev, end: prev.end || v.duration || 0 }));
-          }}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onSeeking={() => rendererRef.current?.resetHistory()}
-        />
-      )}
-      {media?.kind === 'image' && (
-        <img
-          ref={imageRef}
-          src={media.url}
-          alt=""
-          style={HIDDEN_MEDIA}
-          onLoad={() => rendererRef.current?.resetHistory()}
-        />
-      )}
     </div>
   );
 }
-
-const HIDDEN_MEDIA: CSSProperties = {
-  position: 'fixed',
-  left: 0,
-  bottom: 0,
-  width: 1,
-  height: 1,
-  opacity: 0,
-  pointerEvents: 'none',
-  zIndex: -1,
-};
 
 function formatTime(t: number): string {
   if (!Number.isFinite(t)) return '0:00';

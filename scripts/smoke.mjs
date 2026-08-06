@@ -8,12 +8,12 @@
  *   1. every GLSL program links and the app mounts without a fatal screen
  *   2. a test pattern pushed through the pipeline comes out lit, with contrast,
  *      and with visible horizontal line structure — i.e. the beam pass ran
- *   3. the DSP worklet registers both processors, passes audio through the
+ *   3. a real video clip reaches the tube — this is the one that matters most,
+ *      because uploading a <video> through texSubImage2D silently writes
+ *      nothing while every API call reports success, which once shipped a build
+ *      where stills worked perfectly and video was a black screen
+ *   4. the DSP worklet registers both processors, passes audio through the
  *      transport, and generates a non-silent noise bed
- *
- * Video decoding is deliberately not exercised: the software GL stack in CI has
- * no usable video encoder, so no synthetic clip can be produced to feed it. A
- * still image drives every pass the pipeline has.
  *
  *   node scripts/smoke.mjs
  */
@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
 
 const MIME = {
+  '.webm': 'video/webm',
   '.html': 'text/html',
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',
@@ -36,9 +37,17 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+const fixtures = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'tests', 'fixtures');
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   let path = normalize(decodeURIComponent(url.pathname));
+  if (path === '/fixture.webm') {
+    const body = await readFile(join(fixtures, 'motion.webm'));
+    res.writeHead(200, { 'content-type': 'video/webm', 'content-length': body.length });
+    res.end(body);
+    return;
+  }
   if (path === '/' || path.endsWith('/')) path += 'index.html';
   try {
     const body = await readFile(join(root, path));
@@ -197,7 +206,69 @@ if (picture.lineStructure < 0.01) {
   );
 }
 
-/* -------- 3. the DSP worklet -------- */
+/* -------- 3. a real video clip reaches the tube -------- */
+
+const videoResult = await page.evaluate(async () => {
+  const out = { presented: 0, lit: 0, error: null };
+  try {
+    const blob = await (await fetch('/fixture.webm')).blob();
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'motion.webm', { type: 'video/webm' }));
+    window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+
+    const video = await new Promise((resolve, reject) => {
+      const t0 = performance.now();
+      const poll = () => {
+        const v = document.querySelector('video');
+        if (v && v.readyState >= 2 && v.videoWidth > 0) resolve(v);
+        else if (performance.now() - t0 > 20000) reject(new Error('video never decoded'));
+        else setTimeout(poll, 80);
+      };
+      poll();
+    });
+
+    document.querySelector('.transport .play')?.click();
+    await new Promise((r) => setTimeout(r, 2500));
+
+    // Is the element handing out frames at all?
+    const vp = document.createElement('canvas');
+    vp.width = 48; vp.height = 36;
+    const vg = vp.getContext('2d', { willReadFrequently: true });
+    vg.drawImage(video, 0, 0, 48, 36);
+    const vd = vg.getImageData(0, 0, 48, 36).data;
+    for (let i = 0; i < vd.length; i += 4) {
+      out.presented = Math.max(out.presented, (vd[i] + vd[i + 1] + vd[i + 2]) / 3);
+    }
+
+    // And did those frames make it through the pipeline onto the tube?
+    const app = document.querySelector('canvas');
+    const probe = document.createElement('canvas');
+    probe.width = app.width; probe.height = app.height;
+    const p = probe.getContext('2d', { willReadFrequently: true });
+    p.drawImage(app, 0, 0);
+    const { data } = p.getImageData(0, 0, probe.width, probe.height);
+    let lit = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if ((data[i] + data[i + 1] + data[i + 2]) / 3 > 24) lit++;
+    }
+    out.lit = lit / (probe.width * probe.height);
+  } catch (err) {
+    out.error = err instanceof Error ? err.message : String(err);
+  }
+  return out;
+});
+
+if (videoResult.error) failures.push(`video: ${videoResult.error}`);
+if (videoResult.presented < 6) {
+  failures.push(`video: the element presented no frame (max ${videoResult.presented.toFixed(1)})`);
+}
+if (videoResult.lit < 0.10) {
+  failures.push(
+    `video: frames exist but the tube is black (${(videoResult.lit * 100).toFixed(1)}% lit) — the source texture upload is broken`,
+  );
+}
+
+/* -------- 4. the DSP worklet -------- */
 
 const audio = await page.evaluate(async (workletUrl) => {
   const out = { registered: false, transportRms: 0, noiseRms: 0, error: null };
@@ -279,6 +350,9 @@ console.log('smoke test passed');
 console.log(`  gl        ${gl.version}`);
 console.log(
   `  picture   ${(picture.lit * 100).toFixed(1)}% lit · contrast ${picture.contrast.toFixed(2)} · line structure ${picture.lineStructure.toFixed(3)}`,
+);
+console.log(
+  `  video     element ${videoResult.presented.toFixed(0)} · tube ${(videoResult.lit * 100).toFixed(1)}% lit`,
 );
 console.log(
   `  audio     transport rms ${audio.transportRms.toFixed(4)} · noise rms ${audio.noiseRms.toFixed(4)}`,
