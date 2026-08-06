@@ -7,6 +7,20 @@ import {
   sanitize,
 } from './core/params';
 import { PRESETS, parsePreset, serializePreset } from './core/presets';
+import {
+  EMPTY_TIMELINE,
+  Timeline as TimelineData,
+  beginAnimating,
+  evaluateTimeline,
+  isAnimated,
+  moveKeyframe,
+  neighbourKeyTime,
+  removeKeyframe,
+  setEase,
+  setKeyframe,
+  stopAnimating,
+} from './core/timeline';
+import { Timeline } from './ui/Timeline';
 import { randomize, resetGroup } from './core/random';
 import { CrtRenderer, RenderTelemetry } from './video/renderer';
 import { CrtAudioEngine } from './audio/engine';
@@ -53,6 +67,13 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [loop, setLoop] = useState(true);
   const [split, setSplit] = useState(0);
+  const [timeline, setTimeline] = useState<TimelineData>(EMPTY_TIMELINE);
+  const [keySelection, setKeySelection] = useState<{ key: string; index: number } | null>(null);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  // A still has no clock of its own, but keyframes need somewhere to live, so
+  // it gets a virtual playhead that behaves like a transport.
+  const [stillTime, setStillTime] = useState(0);
+  const [stillPlaying, setStillPlaying] = useState(false);
   const [seed, setSeed] = useState(1337);
   const [randomAmount, setRandomAmount] = useState(0.6);
   const [presetName, setPresetName] = useState('reference');
@@ -72,6 +93,13 @@ export default function App() {
   const rendererRef = useRef<CrtRenderer | null>(null);
   const engineRef = useRef<CrtAudioEngine>(new CrtAudioEngine(seed));
   const settingsRef = useRef(settings);
+  const timelineRef = useRef(timeline);
+  /** Settings after keyframes are applied — what the last frame actually used. */
+  const activeSettingsRef = useRef(settings);
+  const stillTimeRef = useRef(0);
+  const stillPlayingRef = useRef(false);
+  const stillDurationRef = useRef(10);
+  const loopRef = useRef(true);
   const frameRef = useRef(0);
   const levelRef = useRef(0);
   const splitRef = useRef(split);
@@ -89,8 +117,11 @@ export default function App() {
   const blitRef = useRef<HTMLCanvasElement | null>(null);
 
   settingsRef.current = settings;
+  timelineRef.current = timeline;
   splitRef.current = split;
   seedRef.current = seed;
+  loopRef.current = loop;
+  stillDurationRef.current = exportSettings.stillDuration;
 
   // The batch handler is registered once, so it must not close over state. It
   // reaches the current media, duration and export callback through these refs.
@@ -174,8 +205,13 @@ export default function App() {
       );
     }
 
+    // Animated parameters are resolved here, once per frame, so the preview and
+    // every export path see exactly the same values at the same time.
+    const active = evaluateTimeline(settingsRef.current, timelineRef.current, time);
+    activeSettingsRef.current = active;
+
     telemetryRef.current = renderer.render({
-      settings: settingsRef.current,
+      settings: active,
       time,
       frame,
       dt,
@@ -190,7 +226,6 @@ export default function App() {
   useEffect(() => {
     let raf = 0;
     let last = performance.now() / 1000;
-    let wallClock = 0;
 
     const tick = () => {
       raf = requestAnimationFrame(tick);
@@ -204,16 +239,33 @@ export default function App() {
 
       const video = videoRef.current;
       const isVideo = !!video && !!media && media.kind === 'video';
-      // Images have no timeline of their own, but the animated effects still
-      // need one, so they run off the wall clock instead.
-      wallClock += dt;
-      const time = isVideo ? video.currentTime : wallClock;
+
+      let time: number;
+      if (isVideo) {
+        time = video.currentTime;
+      } else {
+        // A still runs on a virtual transport so that what you scrub through
+        // here is exactly what gets rendered, and keyframes have a playhead to
+        // be placed against.
+        if (stillPlayingRef.current) {
+          const span = Math.max(0.1, stillDurationRef.current);
+          let next = stillTimeRef.current + dt;
+          if (next >= span) next = loopRef.current ? next % span : span;
+          stillTimeRef.current = next;
+        }
+        time = stillTimeRef.current;
+      }
 
       renderOnce(time, frameRef.current++, dt);
 
       const engine = engineRef.current;
       if (engine.ready) {
-        engine.update(settingsRef.current, telemetryRef.current, time, isVideo ? !video.paused : true);
+        engine.update(
+          activeSettingsRef.current,
+          telemetryRef.current,
+          time,
+          isVideo ? !video.paused : stillPlayingRef.current,
+        );
         levelRef.current = engine.level();
       } else {
         levelRef.current = 0;
@@ -222,6 +274,9 @@ export default function App() {
       if (isVideo && Math.abs(video.currentTime - currentTimeRef.current) > 0.02) {
         currentTimeRef.current = video.currentTime;
         setCurrentTime(video.currentTime);
+      } else if (!isVideo && Math.abs(time - currentTimeRef.current) > 0.02) {
+        currentTimeRef.current = time;
+        setStillTime(time);
       }
     };
 
@@ -330,6 +385,13 @@ export default function App() {
   }, [media]);
 
   const togglePlay = useCallback(async () => {
+    if (media?.kind === 'image') {
+      setStillPlaying((v) => {
+        stillPlayingRef.current = !v;
+        return !v;
+      });
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (!engineRef.current.ready) await armAudio();
@@ -340,18 +402,79 @@ export default function App() {
       video.pause();
       setPlaying(false);
     }
-  }, [armAudio]);
+  }, [armAudio, media]);
 
   /* ---------------- settings plumbing ---------------- */
 
+  /** Length of the thing being worked on — a still's length is chosen, not read. */
+  const clipDuration = media?.kind === 'image' ? exportSettings.stillDuration : duration;
+  /** Where the playhead is, whatever kind of media is loaded. */
+  const playhead = media?.kind === 'image' ? stillTime : currentTime;
+  const playheadRef = useRef(0);
+  playheadRef.current = playhead;
+
+  /**
+   * Editing a parameter writes a keyframe when that parameter is animated, and
+   * changes the base value when it is not — the same rule every editor uses.
+   */
   const change = useCallback((key: string, value: ParamValue) => {
+    if (isAnimated(timelineRef.current, key)) {
+      setTimeline((prev) => setKeyframe(prev, key, playheadRef.current, value));
+      return;
+    }
     setSettings((prev) => (prev[key] === value ? prev : { ...prev, [key]: value }));
   }, []);
+
+  const toggleAnimate = useCallback((key: string) => {
+    setTimeline((prev) => {
+      if (isAnimated(prev, key)) {
+        setKeySelection(null);
+        return stopAnimating(prev, key);
+      }
+      setTimelineOpen(true);
+      return beginAnimating(prev, key, playheadRef.current, settingsRef.current[key]);
+    });
+  }, []);
+
+  const addKeyframeAt = useCallback((key: string, time: number) => {
+    setTimeline((prev) => {
+      // Capture the value the parameter actually has at that moment, so adding
+      // a keyframe never moves anything.
+      const current = evaluateTimeline(settingsRef.current, prev, time)[key];
+      return setKeyframe(prev, key, time, current);
+    });
+  }, []);
+
+  const seekTo = useCallback(
+    (t: number) => {
+      const clamped = Math.max(0, t);
+      if (media?.kind === 'image') {
+        stillTimeRef.current = clamped;
+        currentTimeRef.current = clamped;
+        setStillTime(clamped);
+      } else if (videoRef.current) {
+        videoRef.current.currentTime = clamped;
+        setCurrentTime(clamped);
+        rendererRef.current?.resetHistory();
+      }
+    },
+    [media],
+  );
+
+  const jumpKey = useCallback(
+    (direction: -1 | 1) => {
+      const t = neighbourKeyTime(timelineRef.current, playheadRef.current, direction);
+      if (t !== null) seekTo(t);
+    },
+    [seekTo],
+  );
 
   const applyPreset = useCallback((id: string) => {
     const preset = PRESETS.find((p) => p.id === id);
     if (!preset) return;
     setSettings({ ...preset.settings });
+    setTimeline(EMPTY_TIMELINE);
+    setKeySelection(null);
     setPresetName(id);
     rendererRef.current?.resetHistory();
   }, []);
@@ -374,7 +497,7 @@ export default function App() {
   }, [randomAmount, tab]);
 
   const copySettings = useCallback(async () => {
-    const text = serializePreset(settings, presetName || undefined);
+    const text = serializePreset(settings, presetName || undefined, timeline);
     try {
       await navigator.clipboard.writeText(text);
       setNotice('Settings copied as JSON.');
@@ -382,7 +505,7 @@ export default function App() {
       setPasteText(text);
       setNotice('Clipboard blocked — here is the JSON.');
     }
-  }, [settings, presetName]);
+  }, [settings, presetName, timeline]);
 
   const applyPasted = useCallback(
     (text: string) => {
@@ -392,6 +515,8 @@ export default function App() {
         return;
       }
       setSettings(result.settings);
+      setTimeline(result.timeline ?? EMPTY_TIMELINE);
+      setKeySelection(null);
       setPresetName(result.name ?? '');
       setPasteText(null);
       setNotice('Settings applied.');
@@ -401,14 +526,14 @@ export default function App() {
   );
 
   const savePreset = useCallback(async () => {
-    const blob = new Blob([serializePreset(settings, presetName || 'preset')], {
+    const blob = new Blob([serializePreset(settings, presetName || 'preset', timeline)], {
       type: 'application/json',
     });
     const saved = await saveBlob(blob, `${presetName || 'crtbox'}.crtbox.json`, [
       { name: 'CRTBOX preset', extensions: ['json'] },
     ]);
     if (saved) setNotice(`Preset saved to ${saved}`);
-  }, [settings, presetName]);
+  }, [settings, presetName, timeline]);
 
   const loadPreset = useCallback(() => {
     const input = document.createElement('input');
@@ -564,6 +689,7 @@ export default function App() {
             start: exportRange.start,
             end: exportRange.end,
             duration: exportRange.end - exportRange.start,
+            timeline: timelineRef.current,
             onStage: batch ? (stage) => console.info(`audio: ${stage}`) : undefined,
           }),
           AUDIO_RENDER_TIMEOUT_MS,
@@ -690,7 +816,9 @@ export default function App() {
       const extra: { name: string; data: Uint8Array }[] = [
         {
           name: 'settings.crtbox.json',
-          data: new TextEncoder().encode(serializePreset(settingsRef.current, presetName || undefined)),
+          data: new TextEncoder().encode(
+            serializePreset(settingsRef.current, presetName || undefined, timelineRef.current),
+          ),
         },
       ];
       if (wav) extra.push({ name: 'audio.wav', data: new Uint8Array(await wav.arrayBuffer()) });
@@ -808,13 +936,19 @@ export default function App() {
         void togglePlay();
       } else if (e.key === 'd' || e.key === 'D') {
         triggerDegauss();
+      } else if (e.key === ',') {
+        e.preventDefault();
+        jumpKey(-1);
+      } else if (e.key === '.') {
+        e.preventDefault();
+        jumpKey(1);
       } else if (e.key === 'r' || e.key === 'R') {
         doRandomize();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [doRandomize, togglePlay, triggerDegauss]);
+  }, [doRandomize, togglePlay, triggerDegauss, jumpKey]);
 
   /* ---------------- render ---------------- */
 
@@ -924,6 +1058,10 @@ export default function App() {
                 onToggleOpen={(id) => setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }))}
                 onChange={change}
                 onReset={(id) => setSettings((prev) => resetGroup(prev, id))}
+                timeline={timeline}
+                time={playhead}
+                onToggleAnimate={toggleAnimate}
+                onAddKeyframe={(key) => addKeyframeAt(key, playhead)}
               />
             ))}
           </div>
@@ -1017,26 +1155,21 @@ export default function App() {
           </div>
 
           <div className="transport">
-            <button className="play" onClick={togglePlay} disabled={media?.kind !== 'video'}>
-              {playing ? '❚❚' : '▶'}
+            <button className="play" onClick={togglePlay} disabled={!media}>
+              {(media?.kind === 'image' ? stillPlaying : playing) ? '❚❚' : '▶'}
             </button>
-            <span className="time">{formatTime(currentTime)}</span>
+            <span className="time">{formatTime(playhead)}</span>
             <input
               className="scrub"
               type="range"
               min={0}
-              max={Math.max(duration, 0.01)}
+              max={Math.max(clipDuration, 0.01)}
               step={0.01}
-              value={currentTime}
-              disabled={media?.kind !== 'video'}
-              onChange={(e) => {
-                const t = Number(e.target.value);
-                setCurrentTime(t);
-                if (videoRef.current) videoRef.current.currentTime = t;
-                rendererRef.current?.resetHistory();
-              }}
+              value={playhead}
+              disabled={!media}
+              onChange={(e) => seekTo(Number(e.target.value))}
             />
-            <span className="time">{formatTime(duration)}</span>
+            <span className="time">{formatTime(clipDuration)}</span>
 
             <label className="inline" title="Loop playback">
               <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
@@ -1061,6 +1194,34 @@ export default function App() {
               Degauss
             </button>
           </div>
+
+          <Timeline
+            timeline={timeline}
+            duration={clipDuration}
+            time={playhead}
+            selection={keySelection}
+            open={timelineOpen}
+            onToggleOpen={() => setTimelineOpen((v) => !v)}
+            onSeek={seekTo}
+            onSelect={setKeySelection}
+            onMoveKey={(key, index, t) => {
+              setTimeline((prev) => moveKeyframe(prev, key, index, t));
+              // Moving re-sorts the track, so the selected index may have moved.
+              setKeySelection(null);
+            }}
+            onRemoveKey={(key, index) => setTimeline((prev) => removeKeyframe(prev, key, index))}
+            onSetEase={(key, index, ease) => setTimeline((prev) => setEase(prev, key, index, ease))}
+            onAddKeyAt={addKeyframeAt}
+            onStopAnimating={(key) => {
+              setTimeline((prev) => stopAnimating(prev, key));
+              setKeySelection(null);
+            }}
+            onJump={jumpKey}
+            onClearAll={() => {
+              setTimeline(EMPTY_TIMELINE);
+              setKeySelection(null);
+            }}
+          />
 
           <section className="dock">
             <h2>Export</h2>

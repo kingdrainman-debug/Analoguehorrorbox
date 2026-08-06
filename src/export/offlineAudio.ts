@@ -1,4 +1,5 @@
 import { Settings } from '../core/params';
+import { EMPTY_TIMELINE, Timeline, countKeyframes, evaluateTimeline } from '../core/timeline';
 import { buildChain } from '../audio/engine';
 
 export interface OfflineAudioOptions {
@@ -16,6 +17,62 @@ export interface OfflineAudioOptions {
    * result is a television with nothing playing rather than silence.
    */
   duration?: number;
+  /** Keyframes to follow while rendering. */
+  timeline?: Timeline;
+}
+
+/**
+ * How often an offline render re-applies animated parameters.
+ *
+ * OfflineAudioContext renders as fast as it can and never yields, so a chain
+ * configured once would keep its opening settings for the whole clip and every
+ * audio keyframe would be silently ignored. Suspending on a schedule is the
+ * only way to get automation in — 50 Hz is well past the point where the steps
+ * are audible, given the graph already smooths its own parameter changes.
+ */
+const AUTOMATION_HZ = 50;
+
+/** Drive `chain.update` across the render so keyframed audio actually animates. */
+async function renderWithAutomation(
+  ctx: OfflineAudioContext,
+  chain: { update(settings: Settings, telemetry: AutomationTelemetry): void },
+  settings: Settings,
+  timeline: Timeline,
+  startTime: number,
+  durationSec: number,
+): Promise<AudioBuffer> {
+  const telemetry = (time: number): AutomationTelemetry => ({
+    humPhase: 0,
+    glitch: 0,
+    powerOpen: 1,
+    time,
+    playing: true,
+  });
+
+  if (countKeyframes(timeline) === 0) {
+    chain.update(settings, telemetry(startTime));
+    return ctx.startRendering();
+  }
+
+  const stepCount = Math.max(1, Math.ceil(durationSec * AUTOMATION_HZ));
+  for (let i = 1; i < stepCount; i++) {
+    const at = (i / AUTOMATION_HZ);
+    if (at >= durationSec) break;
+    ctx.suspend(at).then(() => {
+      chain.update(evaluateTimeline(settings, timeline, startTime + at), telemetry(startTime + at));
+      void ctx.resume();
+    });
+  }
+  chain.update(evaluateTimeline(settings, timeline, startTime), telemetry(startTime));
+  return ctx.startRendering();
+}
+
+interface AutomationTelemetry {
+  humPhase: number;
+  glitch: number;
+  powerOpen: number;
+  time: number;
+  playing: boolean;
 }
 
 /**
@@ -49,7 +106,14 @@ export async function renderProcessedAudio(
     chain.output.connect(ctx.destination);
     chain.sync(0, true);
     silence.start(0);
-    const rendered = await ctx.startRendering();
+    const rendered = await renderWithAutomation(
+      ctx,
+      chain,
+      settings,
+      opts.timeline ?? EMPTY_TIMELINE,
+      0,
+      durationSec,
+    );
     opts.onProgress?.(1);
     chain.dispose();
     return rendered;
@@ -93,7 +157,14 @@ export async function renderProcessedAudio(
 
   opts.onStage?.('rendering');
   source.start(0, start, durationSec);
-  const rendered = await ctx.startRendering();
+  const rendered = await renderWithAutomation(
+    ctx,
+    chain,
+    settings,
+    opts.timeline ?? EMPTY_TIMELINE,
+    start,
+    durationSec,
+  );
   opts.onProgress?.(1);
   chain.dispose();
   return rendered;

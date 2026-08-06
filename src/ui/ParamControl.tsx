@@ -6,6 +6,55 @@ interface Props {
   value: ParamValue;
   isDefault: boolean;
   onChange(key: string, value: ParamValue): void;
+  /** Animation state, when a timeline is available. */
+  animated?: boolean;
+  /** A keyframe sits exactly on the playhead. */
+  atKeyframe?: boolean;
+  onToggleAnimate?(key: string): void;
+  onAddKeyframe?(key: string): void;
+}
+
+/**
+ * The stopwatch, and the keyframe marker beside it.
+ *
+ * Arming animation seeds a keyframe holding the current value, so switching it
+ * on never changes the picture — after that, editing the value writes a
+ * keyframe wherever the playhead is.
+ */
+function AnimateControls({
+  paramKey,
+  animated,
+  atKeyframe,
+  onToggleAnimate,
+  onAddKeyframe,
+}: {
+  paramKey: string;
+  animated?: boolean;
+  atKeyframe?: boolean;
+  onToggleAnimate?(key: string): void;
+  onAddKeyframe?(key: string): void;
+}) {
+  if (!onToggleAnimate) return null;
+  return (
+    <>
+      <button
+        className={`stopwatch${animated ? ' on' : ''}`}
+        onClick={() => onToggleAnimate(paramKey)}
+        title={animated ? 'Stop animating this parameter' : 'Animate this parameter over time'}
+      >
+        ◷
+      </button>
+      {animated && onAddKeyframe && (
+        <button
+          className={`keymark${atKeyframe ? ' on' : ''}`}
+          onClick={() => onAddKeyframe(paramKey)}
+          title={atKeyframe ? 'Keyframe at the playhead' : 'Add a keyframe at the playhead'}
+        >
+          ◆
+        </button>
+      )}
+    </>
+  );
 }
 
 /** Logarithmic sliders for frequencies and times, linear for everything else. */
@@ -30,7 +79,16 @@ function format(param: Param, value: number): string {
   return value.toFixed(decimals).replace(/\.?0+$/, '') || '0';
 }
 
-export function ParamControl({ param, value, isDefault, onChange }: Props) {
+export function ParamControl({
+  param,
+  value,
+  isDefault,
+  onChange,
+  animated,
+  atKeyframe,
+  onToggleAnimate,
+  onAddKeyframe,
+}: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -51,24 +109,38 @@ export function ParamControl({ param, value, isDefault, onChange }: Props) {
     onChange(param.key, param.def);
   };
 
+  const animControls = (
+    <AnimateControls
+      paramKey={param.key}
+      animated={animated}
+      atKeyframe={atKeyframe}
+      onToggleAnimate={onToggleAnimate}
+      onAddKeyframe={onAddKeyframe}
+    />
+  );
+
   if (param.type === 'bool') {
     return (
-      <label className="param param-bool" title={param.hint}>
-        <input
-          type="checkbox"
-          checked={value === true}
-          onChange={(e) => onChange(param.key, e.target.checked)}
-        />
-        <span className="param-label">{param.label}</span>
-      </label>
+      <div className={`param param-bool${animated ? ' animated' : ''}`} title={param.hint}>
+        <label>
+          <input
+            type="checkbox"
+            checked={value === true}
+            onChange={(e) => onChange(param.key, e.target.checked)}
+          />
+          <span className="param-label">{param.label}</span>
+        </label>
+        {animControls}
+      </div>
     );
   }
 
   if (param.type === 'enum') {
     return (
-      <div className="param param-enum" title={param.hint}>
+      <div className={`param param-enum${animated ? ' animated' : ''}`} title={param.hint}>
         <div className="param-head">
           <span className="param-label">{param.label}</span>
+          {animControls}
           <button className="reset" onClick={reset} disabled={isDefault} title="Reset to default">
             ⟲
           </button>
@@ -95,9 +167,13 @@ export function ParamControl({ param, value, isDefault, onChange }: Props) {
   const sliderStep = isLog ? 0.0005 : param.type === 'int' ? 1 : param.step;
 
   return (
-    <div className={`param param-number${isDefault ? '' : ' modified'}`} title={param.hint}>
+    <div
+      className={`param param-number${isDefault ? '' : ' modified'}${animated ? ' animated' : ''}`}
+      title={param.hint}
+    >
       <div className="param-head">
         <span className="param-label">{param.label}</span>
+        {animControls}
         <span className="param-value">
           {editing !== null ? (
             <input

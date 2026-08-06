@@ -14,6 +14,9 @@
  *      where stills worked perfectly and video was a black screen
  *   4. the DSP worklet registers both processors, passes audio through the
  *      transport, and generates a non-silent noise bed
+ *   5. keyframing works through the real UI — arming a parameter, writing a
+ *      second key, and confirming the rendered output actually changes between
+ *      them and interpolates in the middle
  *
  *   node scripts/smoke.mjs
  */
@@ -337,6 +340,95 @@ if (audio.noiseRms < 1e-4) {
   failures.push(`audio: the noise bed is silent (rms ${audio.noiseRms.toExponential(2)})`);
 }
 
+/* -------- 5. keyframing animates the render -------- */
+
+const keys = await page.evaluate(async () => {
+  const out = { armed: '', keyframes: 0, diamonds: 0, sat: [], error: null };
+  try {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // React-controlled inputs need the native setter plus a real event.
+    const setInput = (el, value) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    // A saturated still makes signal loss (which fades to grey snow) easy to measure.
+    const src = document.createElement('canvas');
+    src.width = 320; src.height = 240;
+    const g = src.getContext('2d');
+    const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
+    bars.forEach((c, i) => { g.fillStyle = c; g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 240); });
+    const blob = await new Promise((r) => src.toBlob(r, 'image/png'));
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'still.png', { type: 'image/png' }));
+    window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+    await sleep(900);
+
+    const row = [...document.querySelectorAll('.param')].find(
+      (r) => r.querySelector('.param-label')?.textContent === 'Signal loss',
+    );
+    if (!row) throw new Error('could not find the Signal loss parameter');
+
+    row.querySelector('.stopwatch').click();
+    await sleep(250);
+    out.armed = document.querySelector('.timeline-toggle .count')?.textContent ?? '';
+
+    const scrub = document.querySelector('input.scrub');
+    const slider = row.querySelector("input[type='range']");
+    setInput(scrub, 4);
+    await sleep(250);
+    setInput(slider, 1);
+    await sleep(250);
+
+    out.diamonds = document.querySelectorAll('.track .key').length;
+    out.keyframes = out.diamonds;
+
+    const app = document.querySelector('canvas');
+    const probe = document.createElement('canvas');
+    probe.width = 110; probe.height = 82;
+    const pg = probe.getContext('2d', { willReadFrequently: true });
+    for (const t of [0, 2, 4]) {
+      setInput(scrub, t);
+      await sleep(650);
+      pg.drawImage(app, 0, 0, probe.width, probe.height);
+      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
+      let sat = 0;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+        const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (mx > 20) { sat += (mx - mn) / mx; n++; }
+      }
+      out.sat.push(n ? sat / n : 0);
+    }
+  } catch (err) {
+    out.error = err instanceof Error ? err.message : String(err);
+  }
+  return out;
+});
+
+if (keys.error) failures.push(`keyframes: ${keys.error}`);
+if (keys.diamonds !== 2) {
+  failures.push(`keyframes: expected 2 keyframe markers, drew ${keys.diamonds}`);
+}
+if (keys.sat.length === 3) {
+  const [a, mid, b] = keys.sat;
+  if (a - b < 0.15) {
+    failures.push(
+      `keyframes: the animated parameter did not change the render (saturation ${a.toFixed(3)} -> ${b.toFixed(3)})`,
+    );
+  }
+  // Midway must land between the ends, or it is stepping rather than easing.
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  if (mid < lo - 0.02 || mid > hi + 0.02) {
+    failures.push(`keyframes: midpoint ${mid.toFixed(3)} is not between ${a.toFixed(3)} and ${b.toFixed(3)}`);
+  }
+} else {
+  failures.push('keyframes: could not sample the animation');
+}
+
 await browser.close();
 server.close();
 
@@ -356,4 +448,7 @@ console.log(
 );
 console.log(
   `  audio     transport rms ${audio.transportRms.toFixed(4)} · noise rms ${audio.noiseRms.toFixed(4)}`,
+);
+console.log(
+  `  keyframes ${keys.diamonds} markers · saturation ${keys.sat.map((v) => v.toFixed(2)).join(' → ')}`,
 );

@@ -569,6 +569,273 @@ input[type='range']:disabled::-webkit-slider-thumb {
   width: 110px;
 }
 
+/* ---------------- timeline ---------------- */
+
+.timeline {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+}
+
+.timeline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.timeline-toggle:hover {
+  background: var(--panel-2);
+}
+
+.timeline-toggle .title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.timeline-toggle .count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.timeline-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.timeline-tools .sel-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.timeline-tools .sel-label strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.timeline-body {
+  max-height: 190px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.timeline-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 720px;
+}
+
+.stopwatch-demo {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.timeline-grid {
+  display: flex;
+  min-height: 0;
+}
+
+.timeline-names {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+}
+
+.ruler-spacer {
+  height: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.track-name {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  font-size: 11px;
+  color: #b8bfc5;
+  border-bottom: 1px solid #1d2023;
+}
+
+.track-name span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-name button {
+  font-size: 10px;
+  padding: 0 3px;
+}
+
+.timeline-lanes {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* A keyframe at t=0 is centred on the left edge; without this its left half
+     spills over the track-name column. */
+  overflow: hidden;
+}
+
+.ruler {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.ruler .tick {
+  position: absolute;
+  top: 3px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ruler .tick::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  width: 1px;
+  height: 5px;
+  background: var(--line);
+}
+
+.track {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid #1d2023;
+  cursor: crosshair;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 39px,
+    #191c1f 39px,
+    #191c1f 40px
+  );
+}
+
+.track:hover {
+  background-color: #17191c;
+}
+
+/* Keyframes are diamonds, as they are in every editor that has them. */
+.track .key {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #0a0b0c;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: grab;
+}
+
+.track .key:hover {
+  background: #f2f97a;
+}
+
+.track .key.selected {
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(216, 224, 90, 0.5);
+}
+
+/* A hold keyframe cuts rather than fades, so it is drawn as a square. */
+.track .key.hold {
+  border-radius: 0;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 13px;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--danger);
+  pointer-events: none;
+}
+
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 6px solid var(--danger);
+}
+
+/* ---------------- stopwatch on a parameter ---------------- */
+
+.param .stopwatch,
+.param .keymark {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: #4d545a;
+}
+
+.param .stopwatch:hover,
+.param .keymark:hover {
+  color: var(--text);
+}
+
+.param .stopwatch.on {
+  color: var(--accent);
+}
+
+.param .keymark.on {
+  color: var(--accent);
+}
+
+.param.animated .param-label {
+  color: var(--accent);
+}
+
+.param-bool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.param-bool label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  cursor: pointer;
+}
+
 /* ---------------- export dock ---------------- */
 
 .dock {

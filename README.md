@@ -58,6 +58,31 @@ the reason the app exists.
 | **Crackle & Contact Faults** | Poisson events with power-law amplitudes, randomised tone per click, and a burst process for arcing joints |
 | **A/V Link** | Hum bar ↔ hum, signal loss ↔ static, audio → brightness and bloom, picture glitch → dropout, degauss → thump, power state → audio |
 
+### Timeline & keyframes
+
+Every one of the ~160 parameters can be animated over time, which is what turns
+a look into a cut.
+
+- Click the **◷** beside any parameter to start animating it. Arming seeds a
+  keyframe holding the current value, so switching it on never changes the
+  picture.
+- Scrub, change the value, and a keyframe is written at the playhead — the same
+  rule After Effects and Premiere use.
+- Drag the diamonds to retime, click to select, <kbd>Del</kbd> to remove,
+  <kbd>,</kbd> / <kbd>.</kbd> to jump between them.
+- Per-keyframe easing: **Linear**, **Ease in/out/in-out**, and **Hold** — hold is
+  the one that cuts rather than fades, and it is drawn as a square so you can see
+  at a glance where the hard transitions are.
+- Numbers interpolate; enums and switches hold, because there is no value half
+  way between a slot mask and an aperture grille.
+- Animation is carried in the preset JSON, applies to the live preview and to
+  every export path, and drives the **audio** chain as well — a keyframed
+  dropout, hum swell or signal loss lands in the exported soundtrack, not just
+  the picture.
+
+Still images get a real transport too, so a photograph can be scrubbed,
+keyframed and rendered out as a clip.
+
 ### Workflow
 
 - Drag and drop, or a real file dialog in the desktop build
@@ -66,7 +91,7 @@ the reason the app exists.
 - Copy/paste settings as JSON; save and load `.crtbox.json` presets
 - Seeded randomiser with an *amount* control, scoped to the tab you are looking at
 - Per-group bypass and per-group reset
-- Keyboard: <kbd>Space</kbd> play/pause, <kbd>D</kbd> degauss, <kbd>R</kbd> randomise
+- Keyboard: <kbd>Space</kbd> play/pause, <kbd>D</kbd> degauss, <kbd>R</kbd> randomise, <kbd>,</kbd>/<kbd>.</kbd> previous/next keyframe, <kbd>Del</kbd> remove the selected keyframe
 
 ### Export
 
@@ -188,6 +213,7 @@ build/                    generated app icons (npm run icon)
 .github/workflows/        CI, and the Windows installer build
 src/core/params.ts        the parameter schema — single source of truth for the
                           UI, the shader uniforms, the DSP, presets and CLI flags
+src/core/timeline.ts      keyframes: easing, evaluation, editing, serialisation
 src/video/                WebGL2 pipeline: signal → persistence → burn-in →
                           bright → bloom/halation → tube
 src/video/shaders/        GLSL, one file per pass

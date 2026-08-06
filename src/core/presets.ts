@@ -1,4 +1,5 @@
 import { DEFAULTS, Settings, diffFromDefaults, sanitize } from './params';
+import { EMPTY_TIMELINE, Timeline, countKeyframes, sanitizeTimeline } from './timeline';
 
 export interface Preset {
   id: string;
@@ -423,15 +424,22 @@ export interface PresetFile {
   version: number;
   name?: string;
   settings: Settings;
+  /** Keyframes, omitted entirely when nothing is animated. */
+  timeline?: Timeline;
 }
 
 /** Only non-default values are written, so a preset file stays readable. */
-export function serializePreset(settings: Settings, name?: string): string {
+export function serializePreset(
+  settings: Settings,
+  name?: string,
+  timeline: Timeline = EMPTY_TIMELINE,
+): string {
   const file: PresetFile = {
     format: PRESET_FORMAT,
     version: PRESET_VERSION,
     ...(name ? { name } : {}),
     settings: diffFromDefaults(settings),
+    ...(countKeyframes(timeline) > 0 ? { timeline } : {}),
   };
   return JSON.stringify(file, null, 2);
 }
@@ -440,6 +448,7 @@ export interface ParseResult {
   ok: boolean;
   settings?: Settings;
   name?: string;
+  timeline?: Timeline;
   error?: string;
 }
 
@@ -467,5 +476,6 @@ export function parsePreset(text: string, base: Settings): ParseResult {
     ok: true,
     settings: sanitize(body, base),
     name: typeof obj.name === 'string' ? obj.name : undefined,
+    timeline: sanitizeTimeline(obj.timeline),
   };
 }

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { DEFAULTS, Group, ParamValue, Settings } from '../core/params';
+import { Timeline, isAnimated, indexAt } from '../core/timeline';
 import { ParamControl } from './ParamControl';
 
 interface Props {
@@ -10,6 +11,11 @@ interface Props {
   onToggleOpen(id: string): void;
   onChange(key: string, value: ParamValue): void;
   onReset(id: string): void;
+  timeline: Timeline;
+  /** Playhead position, so the keyframe marker can show whether one is here. */
+  time: number;
+  onToggleAnimate(key: string): void;
+  onAddKeyframe(key: string): void;
 }
 
 export function GroupPanel({
@@ -20,6 +26,10 @@ export function GroupPanel({
   onToggleOpen,
   onChange,
   onReset,
+  timeline,
+  time,
+  onToggleAnimate,
+  onAddKeyframe,
 }: Props) {
   const enableKey = group.enableKey;
   const enabled = enableKey ? settings[enableKey] === true : true;
@@ -76,6 +86,12 @@ export function GroupPanel({
               value={settings[p.key]}
               isDefault={settings[p.key] === DEFAULTS[p.key]}
               onChange={onChange}
+              animated={isAnimated(timeline, p.key)}
+              atKeyframe={
+                isAnimated(timeline, p.key) && indexAt(timeline[p.key], time) >= 0
+              }
+              onToggleAnimate={onToggleAnimate}
+              onAddKeyframe={onAddKeyframe}
             />
           ))}
           {hiddenCount > 0 && !advanced && (
