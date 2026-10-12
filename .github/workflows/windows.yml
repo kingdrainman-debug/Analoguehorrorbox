@@ -75,10 +75,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # When the workflow is triggered by a tag push the tag is already there.
+      # When it is dispatched from a branch there is none, so the release is cut
+      # at the version in package.json and action-gh-release creates the tag at
+      # this commit. That keeps releasing possible from an environment that can
+      # push branches but not tags.
+      - name: Work out the release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: CRTBOX ${{ steps.tag.outputs.name }}
           files: |
             release/*.exe
           draft: false
