@@ -62,6 +62,22 @@ uniform float u_maskNorm;    // reciprocal of the mask's spatial mean
 uniform float u_slotStagger;
 uniform float u_gamut;
 
+// colour
+uniform float u_colourOn;
+uniform float u_temperature;
+uniform float u_tintGM;
+uniform vec3 u_gunGain;
+uniform vec3 u_gunLift;
+uniform float u_hue;
+uniform float u_saturation;
+uniform float u_vibrance;
+uniform float u_chromaCrush;
+uniform float u_colourKiller;
+uniform float u_chromaClip;
+
+// upscaling
+uniform float u_reconstruct;   // 0 nearest, 1 bilinear, 2 bicubic
+
 // glow
 uniform float u_glowOn;
 uniform float u_bloomAmount;
@@ -111,6 +127,128 @@ uniform float u_exposure;
 uniform float u_audioLevel;      // 0..1 smoothed programme level
 uniform float u_linkBrightness;
 uniform float u_linkBloom;
+
+/* ------------------------------------------------------------------ *
+ * Source reconstruction
+ *
+ * This is where upscaling actually happens: the signal chain runs at the
+ * source resolution and the tube is drawn at the output resolution, so every
+ * read of u_screen is a resample. Bilinear is what the hardware gives for
+ * free and it goes mushy on a large upscale; Catmull-Rom keeps edges crisp
+ * with a touch of overshoot, which on a CRT reads as correct rather than as
+ * sharpening. Nearest exists because a soft upscale of pixel art is simply
+ * wrong.
+ * ------------------------------------------------------------------ */
+
+vec3 screenBilinear(vec2 uv) {
+  return texture(u_screen, uv).rgb;
+}
+
+vec3 screenNearest(vec2 uv) {
+  vec2 px = uv * u_screenSize;
+  return texture(u_screen, (floor(px) + 0.5) / u_screenSize).rgb;
+}
+
+// Nine-tap Catmull-Rom built from bilinear fetches.
+vec3 screenBicubic(vec2 uv) {
+  vec2 texel = 1.0 / u_screenSize;
+  vec2 px = uv * u_screenSize - 0.5;
+  vec2 f = fract(px);
+  vec2 base = floor(px);
+
+  vec2 f2 = f * f;
+  vec2 f3 = f2 * f;
+  vec2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+  vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+  vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+  vec2 w3 = 0.5 * f3 - 0.5 * f2;
+
+  // Fold each pair of taps into one bilinear fetch: four reads, not sixteen.
+  // The taps sit at base-1, base, base+1 and base+2, so each pair's fetch goes
+  // at that pair's weighted centroid — getting these offsets wrong shifts the
+  // whole picture by a texel and changes its exposure.
+  vec2 s0 = w0 + w1;
+  vec2 s1 = w2 + w3;
+  vec2 o0 = (base - 1.0 + w1 / s0 + 0.5) * texel;
+  vec2 o1 = (base + 1.0 + w3 / s1 + 0.5) * texel;
+
+  vec3 a = texture(u_screen, vec2(o0.x, o0.y)).rgb;
+  vec3 b = texture(u_screen, vec2(o1.x, o0.y)).rgb;
+  vec3 c = texture(u_screen, vec2(o0.x, o1.y)).rgb;
+  vec3 d = texture(u_screen, vec2(o1.x, o1.y)).rgb;
+
+  // s0 + s1 == 1 for Catmull-Rom, so the pair weights are the blend factors.
+  return max(mix(mix(a, b, s1.x), mix(c, d, s1.x), s1.y), vec3(0.0));
+}
+
+vec3 screenSample(vec2 uv) {
+  if (u_reconstruct < 0.5) return screenNearest(uv);
+  if (u_reconstruct < 1.5) return screenBilinear(uv);
+  return screenBicubic(uv);
+}
+
+/* ------------------------------------------------------------------ *
+ * Colour
+ *
+ * Grey-scale tracking first (the gun drives and cutoffs, which are physically
+ * upstream of the faceplate), then the chroma behaviour of the decoder.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Per-gun multipliers for the two white-balance axes.
+ *
+ * Normalised so white stays at the same luminance: the controls change the
+ * colour of white, not the exposure of the picture, which keeps them usable
+ * without chasing Output ▸ Exposure after every nudge.
+ */
+vec3 whiteBalance(float temp, float gm) {
+  vec3 w = vec3(
+    1.0 - temp * 0.20 - gm * 0.05,
+    1.0 + gm * 0.09,
+    1.0 + temp * 0.26 - gm * 0.05);
+  w = max(w, vec3(0.02));
+  return w / max(luma(w), 1e-4);
+}
+
+vec3 gradeChroma(vec3 c) {
+  vec3 yiq = rgb2yiq(c);
+  float mag = length(yiq.yz);
+
+  // Hue rotation acts after decoding, so unlike Tint the set cannot undo it.
+  float a = radians(u_hue);
+  yiq.yz = mat2(cos(a), -sin(a), sin(a), cos(a)) * yiq.yz;
+
+  // Vibrance lifts weak colour and leaves saturated colour alone.
+  float weak = 1.0 - clamp(mag * 2.4, 0.0, 1.0);
+  yiq.yz *= u_saturation * (1.0 + u_vibrance * weak * 1.3);
+
+  // Chroma crush: the floor where tape chroma noise lived. Squashing it is
+  // what a noise reducer did, and it takes the colour speckle with it.
+  if (u_chromaCrush > 0.0001) {
+    float knee = u_chromaCrush * 0.14;
+    yiq.yz *= smoothstep(0.0, max(knee, 1e-4), mag);
+  }
+
+  // Colour killer: below a burst threshold the decoder gives up entirely and
+  // shows a monochrome picture rather than confetti.
+  if (u_colourKiller > 0.0001) {
+    float threshold = u_colourKiller * 0.3;
+    yiq.yz *= smoothstep(threshold * 0.55, threshold, mag);
+  }
+
+  // Chroma overload: past the clip point colour stops getting more saturated
+  // and the excess leaks into luma, which is the blazing red bloom you get out
+  // of overdriven composite.
+  float lim = max(u_chromaClip, 0.05);
+  float newMag = length(yiq.yz);
+  if (newMag > lim) {
+    float excess = newMag - lim;
+    yiq.yz *= lim / max(newMag, 1e-5);
+    yiq.x += excess * 0.35;
+  }
+
+  return yiq2rgb(yiq);
+}
 
 /* ------------------------------------------------------------------ *
  * Geometry
@@ -217,18 +355,21 @@ vec3 sampleGuns(vec2 uv, vec2 p, float blurPx) {
     bOff -= p * u_convRadial * 0.6 * texel;
   }
 
-  // Three horizontal taps approximate the finite width of the spot.
+  // Three horizontal taps approximate the finite width of the spot. Only the
+  // centre tap is reconstructed: the side taps model the spot's own blur, so
+  // resampling them precisely would cost three times the fetches to no visible
+  // end.
   float s = blurPx * texel.x;
   vec3 acc = vec3(0.0);
   const float W0 = 0.5, W1 = 0.25;
 
-  acc.r = texture(u_screen, uv + rOff).r * W0
+  acc.r = screenSample(uv + rOff).r * W0
         + texture(u_screen, uv + rOff + vec2(s, 0.0)).r * W1
         + texture(u_screen, uv + rOff - vec2(s, 0.0)).r * W1;
-  acc.g = texture(u_screen, uv).g * W0
+  acc.g = screenSample(uv).g * W0
         + texture(u_screen, uv + vec2(s, 0.0)).g * W1
         + texture(u_screen, uv - vec2(s, 0.0)).g * W1;
-  acc.b = texture(u_screen, uv + bOff).b * W0
+  acc.b = screenSample(uv + bOff).b * W0
         + texture(u_screen, uv + bOff + vec2(s, 0.0)).b * W1
         + texture(u_screen, uv + bOff - vec2(s, 0.0)).b * W1;
   return acc;
@@ -355,6 +496,14 @@ void main() {
     color = sampleGuns(uv, p, blurPx);
   }
 
+  // ---- grey-scale tracking ----
+  // The gun drives and cutoffs sit between the video amplifier and the screen,
+  // so they act on the reconstructed beam and before the mask blocks any of it.
+  if (u_colourOn > 0.5) {
+    color = color * whiteBalance(u_temperature, u_tintGM) * u_gunGain + u_gunLift;
+    color = max(color, vec3(0.0));
+  }
+
   // ---- phosphor mask ----
   if (u_phosphorOn > 0.5 && u_maskStrength > 0.001) {
     // Likewise normalised: the mask blocks most of the light, and the set
@@ -372,6 +521,11 @@ void main() {
       0.045, 0.90, 0.055,
       0.02, 0.075, 0.905);
     color = mix(color, p22 * color, u_gamut);
+  }
+
+  // ---- chroma behaviour of the decoder ----
+  if (u_colourOn > 0.5) {
+    color = gradeChroma(color);
   }
 
   // ---- tube transfer function ----

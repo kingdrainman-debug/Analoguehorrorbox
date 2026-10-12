@@ -5,6 +5,7 @@ import {
   ParamValue,
   Settings,
   sanitize,
+  str,
 } from './core/params';
 import { PRESETS, parsePreset, serializePreset } from './core/presets';
 import {
@@ -16,6 +17,8 @@ import {
   moveKeyframe,
   neighbourKeyTime,
   removeKeyframe,
+  sanitizeTimeline,
+  countKeyframes,
   setEase,
   setKeyframe,
   stopAnimating,
@@ -31,6 +34,7 @@ import { renderProcessedAudio } from './export/offlineAudio';
 import { startRecording } from './export/recorder';
 import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
 import { desktop, isBatchMode, saveBlob } from './platform/desktop';
+import { outputSize, tubeAspect, upscaleFactor } from './core/output';
 
 type Tab = 'video' | 'audio' | 'link';
 
@@ -65,6 +69,8 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  /** Native source dimensions, so the output frame can be computed for the UI. */
+  const [srcDims, setSrcDims] = useState({ width: 0, height: 0 });
   const [loop, setLoop] = useState(true);
   const [split, setSplit] = useState(0);
   const [timeline, setTimeline] = useState<TimelineData>(EMPTY_TIMELINE);
@@ -149,14 +155,40 @@ export default function App() {
 
   /* ---------------- canvas sizing ---------------- */
 
+  /**
+   * Size the preview canvas to the frame that will actually be exported.
+   *
+   * The canvas used to stretch to fill the stage, which meant the preview was
+   * whatever shape the window happened to be while the file came out a third
+   * shape again. Containing the output aspect inside the stage makes the preview
+   * the export frame: if you see no black bars, there are none in the file.
+   */
   const fitCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const stage = stageRef.current;
     if (!canvas || !stage || exportingRef.current) return;
     const rect = stage.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+
+    const src = rendererRef.current?.sourceSize ?? { width: 4, height: 3 };
+    const aspect = tubeAspect(
+      str(settingsRef.current, 'geometry.aspect'),
+      src.width,
+      src.height,
+    );
+
+    let cssW = rect.width;
+    let cssH = cssW / aspect;
+    if (cssH > rect.height) {
+      cssH = rect.height;
+      cssW = cssH * aspect;
+    }
+    canvas.style.width = `${Math.round(cssW)}px`;
+    canvas.style.height = `${Math.round(cssH)}px`;
+
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    let w = Math.max(2, Math.floor(rect.width * dpr));
-    let h = Math.max(2, Math.floor(rect.height * dpr));
+    let w = Math.max(2, Math.floor(cssW * dpr));
+    let h = Math.max(2, Math.floor(cssH * dpr));
     const pixels = w * h;
     if (pixels > MAX_PREVIEW_PIXELS) {
       const k = Math.sqrt(MAX_PREVIEW_PIXELS / pixels);
@@ -177,6 +209,12 @@ export default function App() {
     ro.observe(stage);
     return () => ro.disconnect();
   }, [fitCanvas]);
+
+  // The frame's shape depends on the aspect setting and on the source, so it has
+  // to be recomputed when either changes and not only when the window moves.
+  useEffect(() => {
+    fitCanvas();
+  }, [fitCanvas, settings['geometry.aspect'], media]);
 
   /* ---------------- one render step ---------------- */
 
@@ -310,18 +348,36 @@ export default function App() {
     [loadMedia],
   );
 
+  /**
+   * Read a file the shell gave us and prefer a blob URL for playback.
+   *
+   * The bytes are read anyway — the audio export needs them — and a blob URL
+   * sidesteps file:// entirely, so the dialog, "Open with" and drag-and-drop all
+   * travel the same path the browser build already uses. The shell's own URL
+   * stays as the fallback for a file too large or too locked to read.
+   */
+  const resolveSource = useCallback(
+    async (file: { path: string; name: string; url: string }) => {
+      let blob: Blob | null = null;
+      try {
+        blob = new Blob([await desktop!.readFile(file.path)]);
+      } catch {
+        // Without the bytes the picture still works from the shell URL; only
+        // audio export needs them.
+        blob = null;
+      }
+      return { blob, url: blob ? URL.createObjectURL(blob) : file.url };
+    },
+    [],
+  );
+
   const openViaDialog = useCallback(async () => {
     if (desktop) {
       const picked = await desktop.openMedia();
       if (!picked) return;
       const kind = /\.(png|jpe?g|webp|gif|bmp)$/i.test(picked.name) ? 'image' : 'video';
-      let blob: Blob | null = null;
-      try {
-        blob = new Blob([await desktop.readFile(picked.path)]);
-      } catch {
-        blob = null;
-      }
-      await loadMedia({ url: picked.url, name: picked.name, kind, blob, path: picked.path });
+      const { blob, url } = await resolveSource(picked);
+      await loadMedia({ url, name: picked.name, kind, blob, path: picked.path });
       return;
     }
     const input = document.createElement('input');
@@ -332,22 +388,16 @@ export default function App() {
       if (file) void openFile(file);
     };
     input.click();
-  }, [loadMedia, openFile]);
+  }, [loadMedia, openFile, resolveSource]);
 
   /** Open a file the desktop shell handed us — launch argument, or "Open with". */
   const openFromPath = useCallback(
     async (file: { path: string; name: string; url: string }) => {
       const kind = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name) ? 'image' : 'video';
-      let blob: Blob | null = null;
-      try {
-        blob = new Blob([await desktop!.readFile(file.path)]);
-      } catch {
-        // Without the bytes the picture still works; only audio export needs them.
-        blob = null;
-      }
-      await loadMedia({ url: file.url, name: file.name, kind, blob, path: file.path });
+      const { blob, url } = await resolveSource(file);
+      await loadMedia({ url, name: file.name, kind, blob, path: file.path });
     },
-    [loadMedia],
+    [loadMedia, resolveSource],
   );
 
   useEffect(() => {
@@ -566,6 +616,34 @@ export default function App() {
     return { start: Math.max(0, start), end: Math.max(start + 0.01, end) };
   }, [exportSettings, duration, isStill]);
 
+  /**
+   * The frame the current settings will produce. Shown in the export panel and
+   * used to shape the preview, so there is one answer rather than three.
+   */
+  const previewOutput = useMemo(
+    () =>
+      outputSize(
+        srcDims.width || 640,
+        srcDims.height || 480,
+        str(settings, 'geometry.aspect'),
+        exportSettings.resolution,
+        exportSettings.customHeight,
+        exportSettings.scale,
+      ),
+    [
+      srcDims,
+      settings,
+      exportSettings.resolution,
+      exportSettings.customHeight,
+      exportSettings.scale,
+    ],
+  );
+
+  const previewUpscale = useMemo(
+    () => upscaleFactor(srcDims.height || 480, previewOutput),
+    [srcDims, previewOutput],
+  );
+
   const snapshot = useCallback(async (): Promise<string | null> => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -668,8 +746,16 @@ export default function App() {
       if (src.width < 4 || src.height < 4) {
         throw new Error('could not determine the source resolution');
       }
-      const outW = evenize(Math.round(src.width * exportSettings.scale));
-      const outH = evenize(Math.round(src.height * exportSettings.scale));
+      const out = outputSize(
+        src.width,
+        src.height,
+        str(settingsRef.current, 'geometry.aspect'),
+        exportSettings.resolution,
+        exportSettings.customHeight,
+        exportSettings.scale,
+      );
+      const outW = out.width;
+      const outH = out.height;
       exportingRef.current = true;
       canvas.width = outW;
       canvas.height = outH;
@@ -883,6 +969,23 @@ export default function App() {
         if (job.params) next = sanitize(job.params, next);
         setSettings(next);
         settingsRef.current = next;
+
+        // A preset file carries its keyframes with it, and a batch render is
+        // exactly where animation matters most. Without this the CLI rendered
+        // the opening frame's values for the whole clip and dropped every
+        // keyframe silently.
+        const jobTimeline = sanitizeTimeline(
+          (job.settings as { timeline?: unknown } | undefined)?.timeline ?? job.timeline,
+        );
+        setTimeline(jobTimeline);
+        timelineRef.current = jobTimeline;
+        const animated = countKeyframes(jobTimeline);
+        if (animated > 0) {
+          console.info(
+            `job: ${animated} keyframes across ${Object.keys(jobTimeline).length} parameters`,
+          );
+        }
+
         if (typeof job.seed === 'number') {
           setSeed(job.seed);
           seedRef.current = job.seed;
@@ -893,6 +996,8 @@ export default function App() {
           fps: job.fps ?? prev.fps,
           quality: job.quality ?? prev.quality,
           scale: job.scale ?? prev.scale,
+          resolution: (job.resolution as ExportSettings['resolution']) ?? prev.resolution,
+          customHeight: job.height ?? prev.customHeight,
           useSourceRange: job.start === undefined && job.end === undefined,
           start: job.start ?? 0,
           end: job.end ?? 0,
@@ -1109,6 +1214,7 @@ export default function App() {
                 onLoadedMetadata={(e) => {
                   const v = e.currentTarget;
                   setDuration(v.duration || 0);
+                  setSrcDims({ width: v.videoWidth, height: v.videoHeight });
                   setExportSettings((prev) => ({ ...prev, end: prev.end || v.duration || 0 }));
                 }}
                 onLoadedData={(e) => {
@@ -1122,7 +1228,17 @@ export default function App() {
                 }}
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
-                onSeeking={() => rendererRef.current?.resetHistory()}
+                onSeeking={() => {
+                  // Scrubbing jumps to an unrelated part of the clip, so the
+                  // phosphor has to be cleared or the old scene bleeds in. An
+                  // export is the opposite case: it advances one frame at a time
+                  // by seeking, which is continuous playback as far as the tube
+                  // is concerned. Resetting there wiped the persistence buffer
+                  // before every single frame, so trails — and burn-in — never
+                  // appeared in a rendered video at all.
+                  if (exportingRef.current) return;
+                  rendererRef.current?.resetHistory();
+                }}
               />
             )}
             {media?.kind === 'image' && (
@@ -1131,7 +1247,13 @@ export default function App() {
                 className="decoder"
                 src={media.url}
                 alt=""
-                onLoad={() => rendererRef.current?.resetHistory()}
+                onLoad={(e) => {
+                  setSrcDims({
+                    width: e.currentTarget.naturalWidth,
+                    height: e.currentTarget.naturalHeight,
+                  });
+                  rendererRef.current?.resetHistory();
+                }}
               />
             )}
             <canvas ref={canvasRef} />
@@ -1232,6 +1354,8 @@ export default function App() {
               busy={busy}
               progress={progress}
               status={status}
+              outputSize={previewOutput}
+              upscale={previewUpscale}
               onChange={setExportSettings}
               onRenderDeterministic={renderDeterministic}
               onRecordRealtime={recordRealtime}
@@ -1281,11 +1405,6 @@ function formatTime(t: number): string {
 
 function baseName(name?: string): string {
   return (name ?? 'crtbox').replace(/\.[^.]+$/, '');
-}
-
-/** yuv420p needs both dimensions even; ProRes prefers it too. */
-function evenize(n: number): number {
-  return Math.max(2, n % 2 === 0 ? n : n + 1);
 }
 
 /** Offline audio rendering is bounded so a stalled decoder cannot hang an export. */

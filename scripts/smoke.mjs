@@ -26,7 +26,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
 
@@ -78,6 +78,10 @@ const browser = await chromium.launch({
     '--enable-unsafe-swiftshader',
     '--no-sandbox',
     '--autoplay-policy=no-user-gesture-required',
+    // The packaged app loads its bundle over file://, where a module script is
+    // a cross-origin request unless this is set. Electron permits it by default;
+    // Chromium does not, so stage 8 needs it to reproduce the shipped condition.
+    '--allow-file-access-from-files',
   ],
 });
 
@@ -429,6 +433,469 @@ if (keys.sat.length === 3) {
   failures.push('keyframes: could not sample the animation');
 }
 
+/*
+ * Stages 6 and 7 get a fresh page. Stage 5 leaves a parameter animated, and an
+ * animated parameter is driven by the timeline rather than by its slider — so
+ * anything that tried to set up a clean state on the same page would be
+ * silently overridden and the assertions would be meaningless.
+ */
+const page2 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+page2.on('pageerror', (err) => failures.push(`page2 error: ${err.message}`));
+await page2.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+await page2.waitForTimeout(1200);
+
+/* -------- 6. the output frame is the shape of the tube -------- */
+
+/*
+ * The export used to take the source dimensions and multiply by a scale factor,
+ * while the tube pass pillarboxes the raster inside whatever frame it is given.
+ * Choosing 4:3 on a 16:9 source therefore produced a 16:9 file with the picture
+ * floating in the middle of it — the setting changed the picture and never the
+ * file. Both the preview canvas and the computed export size now come from one
+ * function, so this asserts the canvas actually follows the setting.
+ */
+
+const framing = await page2.evaluate(async () => {
+  const out = { ratios: {}, error: null };
+  try {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const openGroup = (title) => {
+      const toggle = [...document.querySelectorAll('.group')].find(
+        (s) => s.querySelector('.group-title')?.textContent === title,
+      );
+      if (!toggle) throw new Error(`no group called ${title}`);
+      if (!toggle.classList.contains('open')) toggle.querySelector('.group-toggle').click();
+    };
+
+    openGroup('Tube Geometry');
+    await sleep(300);
+
+    const row = [...document.querySelectorAll('.param')].find(
+      (r) => r.querySelector('.param-label')?.textContent === 'Aspect',
+    );
+    if (!row) throw new Error('could not find the Aspect parameter');
+    const select = row.querySelector('select');
+
+    for (const value of ['4:3', '16:9']) {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(500);
+      const c = document.querySelector('.stage canvas');
+      out.ratios[value] = c.width / c.height;
+    }
+  } catch (err) {
+    out.error = String(err);
+  }
+  return out;
+});
+
+if (framing.error) {
+  failures.push(`framing: ${framing.error}`);
+} else {
+  for (const [label, want] of [['4:3', 4 / 3], ['16:9', 16 / 9]]) {
+    const got = framing.ratios[label];
+    if (!got || Math.abs(got - want) > 0.03) {
+      failures.push(
+        `framing: with aspect ${label} the frame is ${got?.toFixed(3)}, expected ${want.toFixed(3)} — the export would carry baked-in bars`,
+      );
+    }
+  }
+}
+
+/* -------- 7. persistence survives frame-stepped rendering -------- */
+
+/*
+ * The <video> element reset the phosphor buffers on `seeking`, which is right
+ * for a user scrubbing and catastrophic for an export: stepping frame by frame
+ * seeks every frame, so the trails were wiped before each one and no rendered
+ * video ever had them.
+ *
+ * Measured by loading a lit still, swapping it for black, and checking the
+ * screen is still glowing immediately afterwards.
+ */
+
+const trails = await page2.evaluate(async () => {
+  const out = { bright: 0, afterDark: 0, settled: 0, error: null };
+  try {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const setInput = (el, value) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const openGroup = (title) => {
+      const s = [...document.querySelectorAll('.group')].find(
+        (g) => g.querySelector('.group-title')?.textContent === title,
+      );
+      if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
+    };
+    const setParam = (label, v) => {
+      const row = [...document.querySelectorAll('.param')].find(
+        (r) => r.querySelector('.param-label')?.textContent === label,
+      );
+      if (!row) return false;
+      const slider = row.querySelector("input[type='range']");
+      if (!slider) return false;
+      setInput(slider, v);
+      return true;
+    };
+
+    const drop = async (paint, name) => {
+      const c = document.createElement('canvas');
+      c.width = 320;
+      c.height = 240;
+      paint(c.getContext('2d'));
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], name, { type: 'image/png' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+    };
+
+    // A white field, so the only thing that can be lit afterwards is phosphor.
+    await drop((g) => {
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, 320, 240);
+    }, 'white.png');
+    await sleep(1000);
+
+    // Long persistence; everything else that could light the screen on its own
+    // goes to zero so the measurement is unambiguous.
+    openGroup('Phosphor & Mask');
+    openGroup('Signal & Reception');
+    openGroup('Faults & Wear');
+    openGroup('Output');
+    await sleep(350);
+    const missing = [];
+    for (const [label, v] of [
+      ['Persistence', 0.95],
+      ['Snow', 0],
+      ['Signal loss', 0],
+      ['Dust & smears', 0],
+      ['Ambient light', 0],
+    ]) {
+      if (!setParam(label, v)) missing.push(label);
+    }
+    if (missing.length) throw new Error(`could not set ${missing.join(', ')}`);
+    await sleep(700);
+
+
+    const app = document.querySelector('.stage canvas');
+    const probe = document.createElement('canvas');
+    probe.width = 96;
+    probe.height = 72;
+    const pg = probe.getContext('2d', { willReadFrequently: true });
+    const meanLuma = () => {
+      pg.drawImage(app, 0, 0, probe.width, probe.height);
+      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+      return sum / (d.length / 4);
+    };
+
+    for (let i = 0; i < 40 && meanLuma() < 20; i++) await sleep(250);
+    out.bright = meanLuma();
+
+    // Drive the picture to black by closing the video amplifier down rather
+    // than by loading a black frame: swapping media legitimately clears the
+    // phosphor, so that would measure the reset and not the decay.
+    if (!setParam('Contrast', 0)) throw new Error('could not set Contrast');
+    if (!setParam('Brightness', -0.5)) throw new Error('could not set Brightness');
+
+    // Immediately after the picture goes black the phosphor must still be lit.
+    await sleep(150);
+    out.afterDark = meanLuma();
+    await sleep(3000);
+    out.settled = meanLuma();
+  } catch (err) {
+    out.error = String(err);
+  }
+  return out;
+});
+
+if (trails.error) {
+  failures.push(`trails: ${trails.error}`);
+} else if (trails.bright < 8) {
+  failures.push(
+    `trails: the reference frame was not lit (${trails.bright.toFixed(1)}), so decay cannot be measured`,
+  );
+} else if (trails.afterDark <= trails.settled + 1) {
+  failures.push(
+    `trails: no afterglow — ${trails.afterDark.toFixed(1)} just after the picture went black vs ${trails.settled.toFixed(1)} once settled. The phosphor buffer is being cleared.`,
+  );
+}
+
+/* -------- 8. the app runs the way the packaged build loads it -------- */
+
+/*
+ * Everything above is served over HTTP, which is how the dev server and the web
+ * build work — and is exactly why a file://-only defect shipped to Windows
+ * without anything failing. The desktop app calls loadFile(), so the bundle,
+ * the worklet and the media all arrive over file://. This stage loads the built
+ * output that way and asserts the app still mounts and lights the tube.
+ */
+
+const packaged = { url: pathToFileURL(join(root, 'index.html')).href, mounted: 0, lit: 0, error: null };
+{
+  const page3 = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const noise = [];
+  page3.on('pageerror', (err) => noise.push(`pageerror: ${err.message}`));
+  page3.on('console', (msg) => {
+    const text = msg.text();
+    if (
+      msg.type() === 'error' &&
+      !/favicon/.test(text) &&
+      !/status of 404/.test(text) &&
+      !/Automatic fallback to software WebGL/.test(text)
+    ) {
+      noise.push(`console: ${text}`);
+    }
+  });
+
+  try {
+    await page3.goto(packaged.url, { waitUntil: 'load' });
+    await page3.waitForTimeout(2500);
+    const probe = await page3.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Drop a lit still in so the tube has something to show.
+      const c = document.createElement('canvas');
+      c.width = 320;
+      c.height = 240;
+      const g = c.getContext('2d');
+      g.fillStyle = '#d8d8d8';
+      g.fillRect(0, 0, 320, 240);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'still.png', { type: 'image/png' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+
+      // Poll rather than sleep a fixed time. Over file:// the decode and the
+      // first rAF-driven upload land later than over HTTP, and how much later
+      // depends on how loaded the machine is — a fixed wait here is a flaky
+      // test, which is worse than no test.
+      const p = document.createElement('canvas');
+      p.width = 80;
+      p.height = 60;
+      const pg = p.getContext('2d', { willReadFrequently: true });
+      const litFraction = () => {
+        const app = document.querySelector('.stage canvas');
+        if (!app || app.width < 2) return 0;
+        pg.drawImage(app, 0, 0, p.width, p.height);
+        const d = pg.getImageData(0, 0, p.width, p.height).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if ((d[i] + d[i + 1] + d[i + 2]) / 3 > 24) lit++;
+        }
+        return lit / (p.width * p.height);
+      };
+
+      let lit = 0;
+      for (let i = 0; i < 40 && lit < 0.1; i++) {
+        await sleep(250);
+        lit = litFraction();
+      }
+
+      return {
+        mounted: (document.getElementById('root')?.innerHTML || '').length,
+        lit,
+      };
+    });
+    packaged.mounted = probe.mounted;
+    packaged.lit = probe.lit;
+  } catch (err) {
+    packaged.error = String(err);
+  }
+  await page3.close();
+
+  if (packaged.error) {
+    failures.push(`packaged: ${packaged.error}`);
+  } else {
+    if (packaged.mounted < 500) {
+      failures.push(
+        `packaged: the app did not mount over file:// (root is ${packaged.mounted} chars) — the desktop build would open to an empty window`,
+      );
+    }
+    if (packaged.lit < 0.1) {
+      failures.push(
+        `packaged: mounted over file:// but the tube is black (${(packaged.lit * 100).toFixed(1)}% lit)`,
+      );
+    }
+    for (const n of noise) failures.push(`packaged ${n}`);
+  }
+}
+
+/* -------- 9. the colour and glitch sections are actually wired -------- */
+
+/*
+ * A new parameter group is easy to add to the schema and easy to forget to
+ * plumb into the shader, and the failure is silent: the control moves, the
+ * uniform is never set, nothing happens. So this drives the real controls and
+ * asserts the picture responds.
+ *
+ * Glitching is compared off-versus-on at one instant rather than frame to
+ * frame. Its event clock runs on transport time, which does not advance on a
+ * paused still, so a perfectly working tear can be completely static — a
+ * frame-to-frame diff would call that a failure.
+ */
+
+const sections = await (async () => {
+  const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+  await p.waitForTimeout(1200);
+  const out = await p.evaluate(async () => {
+    const res = { satFull: 0, satZero: 0, warmRB: 0, coldRB: 0, glitchOnVsOff: 0, error: null };
+    try {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const setInput = (el, v) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const sect = (t) =>
+        [...document.querySelectorAll('.group')].find(
+          (g) => g.querySelector('.group-title')?.textContent === t,
+        );
+      const open = (t) => {
+        const s = sect(t);
+        if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
+      };
+      const enable = (t, v) => {
+        const c = sect(t)?.querySelector(".group-actions input[type='checkbox']");
+        if (!c) throw new Error(`no enable switch on ${t}`);
+        if (c.checked !== v) c.click();
+      };
+      const setP = (label, v) => {
+        const row = [...document.querySelectorAll('.param')].find(
+          (r) => r.querySelector('.param-label')?.textContent === label,
+        );
+        const slider = row?.querySelector("input[type='range']");
+        if (!slider) throw new Error(`no slider for ${label}`);
+        setInput(slider, v);
+      };
+
+      const src = document.createElement('canvas');
+      src.width = 320;
+      src.height = 240;
+      const g = src.getContext('2d');
+      ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach(
+        (c, i) => {
+          g.fillStyle = c;
+          g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 240);
+        },
+      );
+      const blob = await new Promise((r) => src.toBlob(r, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'bars.png', { type: 'image/png' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+
+      const app = document.querySelector('.stage canvas');
+      const probe = document.createElement('canvas');
+      probe.width = 160;
+      probe.height = 120;
+      const pg = probe.getContext('2d', { willReadFrequently: true });
+      const pixels = () => {
+        pg.drawImage(app, 0, 0, probe.width, probe.height);
+        return pg.getImageData(0, 0, probe.width, probe.height).data;
+      };
+      const measure = () => {
+        const d = pixels();
+        let sat = 0;
+        let n = 0;
+        let rb = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+          const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+          if (mx > 18) {
+            sat += (mx - mn) / mx;
+            n++;
+          }
+          rb += d[i + 2] - d[i];
+        }
+        return { sat: n ? sat / n : 0, rb: rb / (d.length / 4) };
+      };
+
+      open('Colour');
+
+      // Poll for the picture rather than assuming a fixed decode time; a fixed
+      // wait here turns a passing test into an occasionally-failing one.
+      for (let i = 0; i < 40 && measure().sat < 0.2; i++) await sleep(250);
+
+      res.satFull = measure().sat;
+      setP('Saturation', 0);
+      await sleep(600);
+      res.satZero = measure().sat;
+      setP('Saturation', 1);
+      await sleep(400);
+
+      setP('Temperature', -1);
+      await sleep(600);
+      res.warmRB = measure().rb;
+      setP('Temperature', 1);
+      await sleep(600);
+      res.coldRB = measure().rb;
+      setP('Temperature', 0);
+      await sleep(400);
+
+      // Freeze everything that moves on its own, so the only difference between
+      // the two captures is the glitch section.
+      enable('Sync & Timebase', false);
+      enable('Faults & Wear', false);
+      open('Signal & Reception');
+      await sleep(300);
+      for (const [l, v] of [['Snow', 0], ['Signal loss', 0], ['Interference', 0]]) setP(l, v);
+      await sleep(600);
+
+      const off = pixels();
+      enable('Glitching', true);
+      open('Glitching');
+      await sleep(350);
+      for (const [l, v] of [
+        ['Event rate', 1],
+        ['Tape dropout', 1],
+        ['Line repeat', 1],
+        ['Sync slip', 1],
+        ['Chroma burst', 1],
+        ['Polarity flip', 1],
+      ]) {
+        setP(l, v);
+      }
+      await sleep(900);
+      const on = pixels();
+      let sum = 0;
+      for (let i = 0; i < off.length; i += 4) {
+        sum += Math.abs(off[i] - on[i]) + Math.abs(off[i + 1] - on[i + 1]) + Math.abs(off[i + 2] - on[i + 2]);
+      }
+      res.glitchOnVsOff = sum / (off.length / 4);
+    } catch (err) {
+      res.error = String(err);
+    }
+    return res;
+  });
+  await p.close();
+  return out;
+})();
+
+if (sections.error) {
+  failures.push(`sections: ${sections.error}`);
+} else {
+  if (sections.satFull < 0.2) {
+    failures.push(`colour: the reference frame is not saturated (${sections.satFull.toFixed(3)})`);
+  } else if (sections.satZero > 0.05) {
+    failures.push(
+      `colour: Saturation 0 left ${sections.satZero.toFixed(3)} saturation — the control is not reaching the shader`,
+    );
+  }
+  if (sections.coldRB - sections.warmRB < 10) {
+    failures.push(
+      `colour: Temperature barely moved blue-minus-red (warm ${sections.warmRB.toFixed(1)} vs cold ${sections.coldRB.toFixed(1)})`,
+    );
+  }
+  if (sections.glitchOnVsOff < 8) {
+    failures.push(
+      `glitch: turning the section on changed the picture by only ${sections.glitchOnVsOff.toFixed(1)} per pixel — it is not wired up`,
+    );
+  }
+}
+
 await browser.close();
 server.close();
 
@@ -452,3 +919,16 @@ console.log(
 console.log(
   `  keyframes ${keys.diamonds} markers · saturation ${keys.sat.map((v) => v.toFixed(2)).join(' → ')}`,
 );
+console.log(
+  `  framing   4:3 ${framing.ratios['4:3']?.toFixed(3)} · 16:9 ${framing.ratios['16:9']?.toFixed(3)}`,
+);
+console.log(
+  `  packaged  file:// mounted ${packaged.mounted} chars · ${(packaged.lit * 100).toFixed(1)}% lit`,
+);
+console.log(
+  `  trails    lit ${trails.bright.toFixed(1)} → ${trails.afterDark.toFixed(1)} just after black → ${trails.settled.toFixed(1)} settled`,
+);
+console.log(
+  `  colour    saturation ${sections.satFull.toFixed(2)} → ${sections.satZero.toFixed(2)} at zero · temperature B−R ${sections.warmRB.toFixed(0)} → ${sections.coldRB.toFixed(0)}`,
+);
+console.log(`  glitch    ${sections.glitchOnVsOff.toFixed(1)} per-pixel change when switched on`);

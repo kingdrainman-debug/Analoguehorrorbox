@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isDesktop } from '../platform/desktop';
 import { describeDuration, formatTimecode, parseTimecode } from '../core/time';
+import { RESOLUTION_TARGETS, ResolutionTarget } from '../core/output';
 
 export type ExportFormat = 'h264' | 'hevc' | 'prores' | 'gif' | 'webm' | 'pngseq' | 'wav';
 
@@ -9,6 +10,10 @@ export interface ExportSettings {
   fps: number;
   quality: number;
   scale: number;
+  /** Output height target. The width follows from the tube's aspect ratio. */
+  resolution: ResolutionTarget;
+  /** Used only when `resolution` is 'custom'. */
+  customHeight: number;
   start: number;
   end: number;
   useSourceRange: boolean;
@@ -21,6 +26,8 @@ export const DEFAULT_EXPORT: ExportSettings = {
   fps: 30,
   quality: 18,
   scale: 1,
+  resolution: 'source',
+  customHeight: 1080,
   start: 0,
   end: 0,
   useSourceRange: true,
@@ -35,6 +42,10 @@ interface Props {
   busy: boolean;
   progress: number;
   status: string;
+  /** Pixel dimensions the current settings will produce, for the readout. */
+  outputSize: { width: number; height: number };
+  /** Output height ÷ source height. Above 1 the render is an upscale. */
+  upscale: number;
   onChange(next: ExportSettings): void;
   onRenderDeterministic(): void;
   onRecordRealtime(): void;
@@ -102,6 +113,8 @@ export function ExportPanel({
   busy,
   progress,
   status,
+  outputSize,
+  upscale,
   onChange,
   onRenderDeterministic,
   onRecordRealtime,
@@ -176,22 +189,60 @@ export function ExportPanel({
         )}
 
         {!audioOnly && (
-          <label className="field small">
-            <span>Scale</span>
+          <label className="field">
+            <span>Resolution</span>
             <select
-              value={String(value.scale)}
-              onChange={(e) => set('scale', Number(e.target.value))}
+              value={value.resolution}
+              onChange={(e) => set('resolution', e.target.value as ResolutionTarget)}
               disabled={busy}
             >
-              {[0.5, 0.75, 1, 1.5, 2].map((s) => (
-                <option key={s} value={s}>
-                  {s}×
+              {RESOLUTION_TARGETS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </select>
           </label>
         )}
+
+        {!audioOnly && value.resolution === 'custom' && (
+          <label className="field small">
+            <span>Height</span>
+            <input
+              type="number"
+              min={32}
+              max={4320}
+              step={2}
+              value={value.customHeight}
+              onChange={(e) =>
+                set('customHeight', Math.max(32, Math.min(4320, Number(e.target.value) || 1080)))
+              }
+              disabled={busy}
+            />
+          </label>
+        )}
       </div>
+
+      {!audioOnly && (
+        <p className="export-hint size">
+          <strong>
+            {outputSize.width}×{outputSize.height}
+          </strong>{' '}
+          — the frame is the shape of the tube, so the aspect ratio you choose
+          under Tube Geometry is the aspect ratio of the file, with no bars baked
+          in.
+          {upscale > 1.02 && (
+            <>
+              {' '}
+              Upscaling {upscale.toFixed(1)}×: the scanlines, mask and glow are
+              generated at this resolution rather than stretched, so the CRT
+              structure is genuinely sharper. The photographic detail underneath
+              is still whatever the source had.
+            </>
+          )}
+          {upscale < 0.98 && ' Downscaling: the mask will start to alias — keep the pitch coarse.'}
+        </p>
+      )}
 
       {active && <p className="export-hint">{active.hint}</p>}
 

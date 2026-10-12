@@ -52,6 +52,20 @@ uniform float u_vRoll;
 uniform float u_vHold;
 uniform float u_timebaseWobble;
 
+// glitch — discrete failures rather than continuous wear
+uniform float u_glitchOn;
+uniform float u_glitchRate;
+uniform float u_dropout;
+uniform float u_dropoutLength;
+uniform float u_lineRepeat;
+uniform float u_syncSlip;
+uniform float u_chromaBurst;
+uniform float u_blockCorrupt;
+uniform float u_blockSize;
+uniform float u_blockColour;
+uniform float u_posterize;
+uniform float u_invert;
+
 /* Active-line length in microseconds; used to turn a bandwidth in MHz into a
    filter width in pixels. NTSC gives ~52.6 us of picture per 63.5 us line. */
 const float ACTIVE_LINE_US = 52.6;
@@ -131,6 +145,58 @@ Timebase timebase(vec2 uv) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Glitching
+ *
+ * Everything here is gated on u_glitchRate, so the whole section goes quiet at
+ * zero however high the individual amounts are. The gates are steps against a
+ * hash rather than smooth noise: a glitch that fades in is not a glitch.
+ *
+ * The event clock is quantised time, so an event holds for a whole number of
+ * ticks instead of flickering per frame — a one-frame tear reads as a compression
+ * artefact, while three or four frames reads as the tape failing.
+ * ------------------------------------------------------------------ */
+
+// Events per second, from rare punctuation to near-continuous breakup.
+float eventClock() {
+  return floor(u_time * mix(1.5, 16.0, clamp(u_glitchRate, 0.0, 1.0)));
+}
+
+/**
+ * A horizontal band of the frame, present for `density` of the ticks.
+ *
+ * Returns 0 outside the band and ramps to 1 at its centre, so the edges of a
+ * tear are soft by a line or two the way a real timebase recovery is.
+ */
+float bandGate(float y, float salt, float density, float height) {
+  if (density <= 0.0001) return 0.0;
+  float era = eventClock() + u_seed * 71.0 + salt;
+  if (hash11(era) > density) return 0.0;
+  float centre = hash11(era * 1.37 + 0.5);
+  return 1.0 - smoothstep(height * 0.4, height, abs(y - centre));
+}
+
+/**
+ * Tape dropout: the head loses contact and the line reads as full white or
+ * full black for a short run. Decided per line, so the streaks are ragged.
+ */
+float dropoutAt(vec2 uv, out float polarity) {
+  polarity = 1.0;
+  if (u_dropout <= 0.0001) return 0.0;
+  float line = floor(uv.y * u_srcSize.y);
+  float id = line * 7.13 + eventClock() * 313.0 + u_seed * 97.0;
+  if (hash11(id) > u_dropout * clamp(u_glitchRate, 0.0, 1.0) * 0.5) return 0.0;
+  float start = hash11(id * 2.17);
+  float len = max(u_dropoutLength * hash11(id * 3.31), 0.004);
+  // Most dropouts are a bright scratch; a minority drop to black instead.
+  polarity = hash11(id * 5.71) > 0.28 ? 1.0 : -1.0;
+  float edge = len * 0.18;
+  return smoothstep(start - edge, start + edge, uv.x)
+       * (1.0 - smoothstep(start + len - edge, start + len + edge, uv.x));
+}
+
+
+
+/* ------------------------------------------------------------------ *
  * Band-limiting
  * ------------------------------------------------------------------ */
 
@@ -153,6 +219,48 @@ void main() {
   Timebase tb = timebase(v_uv);
   vec2 uv = tb.uv;
 
+  /* ---- glitch, coordinate domain ----
+     These have to happen before anything is sampled, because they change where
+     the picture is read from rather than what it looks like afterwards. */
+  float blockErr = 0.0;
+  float chromaSlide = 0.0;
+  float posterizeBand = 0.0;
+  float invertBand = 0.0;
+  if (u_glitchOn > 0.5 && u_glitchRate > 0.0001) {
+    // Sync slip: horizontal sync is briefly lost and a band tears sideways.
+    float slip = bandGate(uv.y, 3.0, u_syncSlip * u_glitchRate, 0.05);
+    if (slip > 0.0) {
+      uv.x += slip * (hash11(eventClock() * 2.9 + u_seed) - 0.5) * 0.45;
+      tb.damage = max(tb.damage, slip);
+    }
+
+    // Line repeat: the timebase corrector loses lines and holds the last good
+    // one, which smears it down the band in steps.
+    float rep = bandGate(uv.y, 17.0, u_lineRepeat * u_glitchRate, 0.07);
+    if (rep > 0.5) {
+      const float hold = 18.0;
+      uv.y = floor(uv.y * u_srcSize.y / hold) * hold / u_srcSize.y;
+      tb.damage = max(tb.damage, rep);
+    }
+
+    // Block corruption: macroblocks fetch from the wrong address. Digital, and
+    // deliberately so — it is the sound of a transfer failing, not a tape.
+    if (u_blockCorrupt > 0.0001) {
+      float bs = max(u_blockSize, 2.0);
+      vec2 blk = floor(uv * u_srcSize / bs);
+      float id = blk.x * 31.7 + blk.y * 17.3 + eventClock() * 7.0 + u_seed * 13.0;
+      if (hash11(id) < u_blockCorrupt * u_glitchRate * 0.4) {
+        uv += (hash22(vec2(id, id * 1.7)) - 0.5) * bs * 6.0 / u_srcSize;
+        blockErr = 1.0;
+        tb.damage = max(tb.damage, 0.8);
+      }
+    }
+
+    chromaSlide = bandGate(uv.y, 29.0, u_chromaBurst * u_glitchRate, 0.06);
+    posterizeBand = bandGate(uv.y, 41.0, u_posterize * u_glitchRate, 0.09);
+    invertBand = bandGate(uv.y, 53.0, u_invert * u_glitchRate, 0.05);
+  }
+
   float pxPerCycleY = bandwidthToPixels(u_lumaBw);
   float pxPerCycleC = bandwidthToPixels(u_chromaBw);
 
@@ -167,7 +275,8 @@ void main() {
     // Luma and chroma are filtered separately and by very different amounts —
     // this asymmetry is the single most recognisable analogue-video signature.
     vec3 lumaSrc = lowpassH(uv, pxPerCycleY);
-    vec2 cuv = uv - vec2(u_chromaDelay / u_srcSize.x, 0.0);
+    // A chroma burst slides colour off luma by far more than the normal delay.
+    vec2 cuv = uv - vec2((u_chromaDelay + chromaSlide * 90.0) / u_srcSize.x, 0.0);
     vec3 chromaSrc = lowpassH(cuv, pxPerCycleC);
 
     yiq = vec3(rgb2yiq(lumaSrc).x, rgb2yiq(chromaSrc).yz);
@@ -236,6 +345,43 @@ void main() {
   }
 
   vec3 rgb = yiq2rgb(yiq);
+
+  /* ---- glitch, colour domain ---- */
+  if (u_glitchOn > 0.5 && u_glitchRate > 0.0001) {
+    // A corrupted block takes the wrong chroma as well as the wrong address.
+    // Without this the breakup reads as a smear; with it, it reads as digital.
+    if (blockErr > 0.5 && u_blockColour > 0.0001) {
+      float bs = max(u_blockSize, 2.0);
+      vec2 blk = floor(uv * u_srcSize / bs);
+      float id = blk.x * 13.1 + blk.y * 7.7 + eventClock() * 3.0 + u_seed * 5.0;
+      vec3 c = rgb2yiq(rgb);
+      float a = (hash11(id) - 0.5) * TAU;
+      c.yz = mat2(cos(a), -sin(a), sin(a), cos(a)) * c.yz * (1.0 + u_blockColour);
+      rgb = mix(rgb, yiq2rgb(c), u_blockColour);
+    }
+
+    // Bit crush: luma collapses to a handful of levels inside the band.
+    if (posterizeBand > 0.0) {
+      float levels = mix(26.0, 3.0, u_posterize);
+      vec3 crushed = floor(rgb * levels + 0.5) / levels;
+      rgb = mix(rgb, crushed, posterizeBand);
+    }
+
+    // Polarity flip.
+    if (invertBand > 0.0) {
+      rgb = mix(rgb, vec3(1.0) - rgb, invertBand * u_invert);
+    }
+
+    // Tape dropout rides over everything else: it is an absence of signal, not
+    // a modification of one, so it replaces rather than blends with the picture.
+    float polarity;
+    float drop = dropoutAt(uv, polarity);
+    if (drop > 0.0) {
+      vec3 level = polarity > 0.0 ? vec3(1.08, 1.06, 1.0) : vec3(0.02);
+      rgb = mix(rgb, level, drop);
+      tb.damage = max(tb.damage, drop);
+    }
+  }
 
   // Tuner noise. RF is grainier and has a chroma component; a composite feed
   // from a VCR is finer and closer to monochrome.

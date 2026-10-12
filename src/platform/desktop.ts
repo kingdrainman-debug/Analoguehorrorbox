@@ -21,6 +21,8 @@ export interface HeadlessJob {
   output: string;
   preset?: string;
   settings?: unknown;
+  /** Keyframes, when supplied separately from a preset file. */
+  timeline?: unknown;
   params?: Record<string, number | boolean | string>;
   format?: string;
   fps?: number;
@@ -29,6 +31,8 @@ export interface HeadlessJob {
   start?: number;
   end?: number;
   scale?: number;
+  resolution?: string;
+  height?: number;
 }
 
 export interface DesktopBridge {

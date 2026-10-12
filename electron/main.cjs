@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 
 const DEV_SERVER = process.env.CRTBOX_DEV_SERVER || '';
 const INDEX_HTML = path.join(__dirname, '..', 'dist', 'index.html');
@@ -186,6 +187,8 @@ function parseCli(argv) {
       case 'start': job.start = Number(value); break;
       case 'end': job.end = Number(value); break;
       case 'scale': job.scale = Number(value); break;
+      case 'resolution': job.resolution = value; break;
+      case 'height': job.height = Number(value); break;
       case 'help': job.help = true; break;
       default:
         // Anything with a dot is treated as a parameter override, which means
@@ -240,11 +243,18 @@ Options
   --fps N               output frame rate                      (default: source)
   --quality N           CRF for h264/hevc, profile for ProRes  (default 18)
   --scale N             render scale, 0.25 .. 2.0              (default 1)
+  --resolution R        output height: source | 480p | 576p | 720p | 1080p
+                        | 1440p | 2160p | custom               (default source)
+  --height N            output height, with --resolution custom
   --start S --end S     clip range in seconds
   --seed N              randomiser / noise seed
   --<group>.<param> V   override any effect parameter, e.g. --tube.humBar 0.4
 
 Parameter names are exactly the keys used in exported preset JSON.
+
+The rendered frame is always the shape of the tube, so --geometry.aspect
+decides the output aspect ratio and --resolution decides its size. There are
+never black bars baked into the file.
 `;
 
 /* ------------------------------------------------------------------ *
@@ -415,8 +425,22 @@ function registerIpc() {
   ipcMain.handle('encode:cancel', encodeCancel);
 }
 
+/**
+ * Absolute path to a URL the renderer can load.
+ *
+ * This used to be hand-rolled: split on the separator, encodeURIComponent each
+ * segment, join with '/'. On Linux the first segment of an absolute path is
+ * empty, so it looked correct in development and in CI. On Windows the first
+ * segment is the drive letter, and encodeURIComponent turns `C:` into `C%3A` —
+ * so every file the user opened became file:///C%3A/… , which is not a path
+ * Chromium will resolve. Opening media through the dialog or "Open with" loaded
+ * nothing at all, on the one platform the app actually ships to. UNC paths came
+ * out mangled too.
+ *
+ * pathToFileURL is the standard library's answer to all of that.
+ */
 function pathToUrl(p) {
-  return `file://${p.split(path.sep).map(encodeURIComponent).join('/')}`.replace('file://', process.platform === 'win32' ? 'file:///' : 'file://');
+  return pathToFileURL(p).href;
 }
 
 /* ------------------------------------------------------------------ *

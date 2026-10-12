@@ -112,6 +112,12 @@ const ASPECTS: EnumOption[] = [
   { value: 'source', label: 'Match source', code: 2 },
 ];
 
+const RECONSTRUCT: EnumOption[] = [
+  { value: 'nearest', label: 'Nearest (hard pixels)', code: 0, hint: 'No interpolation. For pixel art and 8/16-bit capture, where a soft upscale is simply wrong.' },
+  { value: 'bilinear', label: 'Bilinear', code: 1, hint: 'What the GPU does for free. Soft, slightly mushy on a big upscale.' },
+  { value: 'bicubic', label: 'Bicubic (Catmull-Rom)', code: 2, hint: 'Four-tap cubic with a touch of overshoot. The best default when rendering above the source resolution.' },
+];
+
 const CHANNEL_MODES: EnumOption[] = [
   { value: 'stereo', label: 'Stereo', code: 0 },
   { value: 'mono', label: 'Mono (L+R)', code: 1, hint: 'How every pre-1984 set and most sets after it actually played back.' },
@@ -160,6 +166,31 @@ const VIDEO_GROUPS: Group[] = [
       { key: 'picture.tint', type: 'float', label: 'Tint', min: -40, max: 40, step: 0.1, def: 0, unit: '°', hint: 'NTSC hue error — the reason it was nicknamed "Never Twice the Same Colour".' },
       { key: 'picture.sharpness', type: 'float', label: 'Sharpness', min: 0, max: 2, step: 0.001, def: 1.0, hint: 'Peaking filter. Turning it up produces the classic white edge-ringing halo.' },
       { key: 'picture.inputGamma', type: 'float', label: 'Source gamma', min: 1.0, max: 3.0, step: 0.01, def: 2.2, advanced: true, noRandom: true, hint: 'Gamma the source file is assumed to be encoded in.' },
+      { key: 'picture.reconstruct', type: 'enum', label: 'Source sampling', options: RECONSTRUCT, def: 'bicubic', noRandom: true, hint: 'How the source is read when the render resolution is higher than the file. Matters a great deal when upscaling.' },
+    ],
+  },
+  {
+    id: 'colour',
+    label: 'Colour',
+    kind: 'video',
+    enableKey: 'colour.enabled',
+    hint: 'Grey-scale tracking and chroma behaviour. A CRT was never colour-accurate: the white point drifted with brightness, the guns aged at different rates, and the colour decoder gave up on weak signals.',
+    params: [
+      { key: 'colour.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'colour.temperature', type: 'float', label: 'Temperature', min: -1, max: 1, step: 0.001, def: 0, hint: 'Negative is warm (D65, what film and broadcast assumed); positive is the cold blue-white most sets actually shipped at, around 9300 K.' },
+      { key: 'colour.tintGM', type: 'float', label: 'Green / magenta', min: -1, max: 1, step: 0.001, def: 0, hint: 'The second white-balance axis. Ageing sets drift green as the green gun is driven hardest.' },
+      { key: 'colour.redGain', type: 'float', label: 'Red gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true, hint: 'Per-gun drive. The service-menu controls.' },
+      { key: 'colour.greenGain', type: 'float', label: 'Green gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true },
+      { key: 'colour.blueGain', type: 'float', label: 'Blue gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true },
+      { key: 'colour.redLift', type: 'float', label: 'Red cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true, hint: 'Per-gun black level. Mis-set cutoffs are why old sets have coloured blacks.' },
+      { key: 'colour.greenLift', type: 'float', label: 'Green cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true },
+      { key: 'colour.blueLift', type: 'float', label: 'Blue cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true },
+      { key: 'colour.hue', type: 'float', label: 'Hue rotate', min: -180, max: 180, step: 0.1, def: 0, unit: '°', hint: 'Rotates the whole colour wheel. Unlike Tint this acts after decoding, so it cannot be cancelled out by the set.' },
+      { key: 'colour.saturation', type: 'float', label: 'Saturation', min: 0, max: 2, step: 0.001, def: 1, hint: 'Overall chroma, applied after the tube. Picture ▸ Colour is the front-panel knob upstream of it.' },
+      { key: 'colour.vibrance', type: 'float', label: 'Vibrance', min: 0, max: 1, step: 0.001, def: 0, hint: 'Lifts weak colours and leaves already-saturated ones alone. Flattering, and not remotely period-correct.' },
+      { key: 'colour.chromaCrush', type: 'float', label: 'Chroma crush', min: 0, max: 1, step: 0.001, def: 0, hint: 'Nearly-grey pixels collapse to grey. Tape chroma noise lived down here, so squashing it is what a noise reducer did.' },
+      { key: 'colour.colourKiller', type: 'float', label: 'Colour killer', min: 0, max: 1, step: 0.001, def: 0, hint: 'Below a burst-amplitude threshold the decoder mutes colour entirely rather than show confetti. Turn it up and a weak signal goes monochrome.' },
+      { key: 'colour.chromaClip', type: 'float', label: 'Chroma overload', min: 0.5, max: 2, step: 0.001, def: 2, advanced: true, hint: 'Where oversaturated colour stops getting more saturated and starts smearing. Low values give the blazing red bloom of overdriven composite.' },
     ],
   },
   {
@@ -336,6 +367,27 @@ const VIDEO_GROUPS: Group[] = [
       { key: 'faults.degauss', type: 'float', label: 'Degauss strength', min: 0, max: 1, step: 0.001, def: 0.6, noRandom: true, hint: 'Strength of the colour-warping ripple fired by the Degauss button.' },
       { key: 'faults.powerState', type: 'enum', label: 'Power state', options: POWER_STATES, def: 'on', noRandom: true },
       { key: 'faults.warmup', type: 'float', label: 'Warm-up time', min: 0.2, max: 8, step: 0.01, def: 2.2, unit: 's', noRandom: true },
+    ],
+  },
+  {
+    id: 'glitch',
+    label: 'Glitching',
+    kind: 'video',
+    enableKey: 'glitch.enabled',
+    hint: 'Discrete failures rather than continuous wear. Everything here fires in bursts driven by Event rate, so it punctuates a shot instead of sitting on it — which is what makes a cut land.',
+    params: [
+      { key: 'glitch.enabled', type: 'bool', label: 'Enabled', def: false, noRandom: true },
+      { key: 'glitch.rate', type: 'float', label: 'Event rate', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'How often anything below fires. At 0 the section is silent however high the individual amounts are.' },
+      { key: 'glitch.dropout', type: 'float', label: 'Tape dropout', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'The head loses contact with the oxide and the line goes to white or black. The single most recognisable VHS failure.' },
+      { key: 'glitch.dropoutLength', type: 'float', label: 'Dropout length', min: 0.01, max: 1, step: 0.001, def: 0.18, advanced: true, hint: 'How far across the line a dropout runs.' },
+      { key: 'glitch.lineRepeat', type: 'float', label: 'Line repeat', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'The timebase corrector loses a line and holds the previous one, smearing it downward in bands.' },
+      { key: 'glitch.syncSlip', type: 'float', label: 'Sync slip', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'A band of the picture tears sideways as horizontal sync is briefly lost.' },
+      { key: 'glitch.chromaBurst', type: 'float', label: 'Chroma burst', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'Colour detaches from luma and slides off in a violent band.' },
+      { key: 'glitch.blockCorrupt', type: 'float', label: 'Block corruption', min: 0, max: 1, step: 0.001, def: 0, hint: 'Digital, not analogue: macroblocks fetch from the wrong place. For the moment in a tape where a digital transfer fails.' },
+      { key: 'glitch.blockSize', type: 'float', label: 'Block size', min: 2, max: 64, step: 0.5, def: 16, unit: 'px', advanced: true },
+      { key: 'glitch.blockColour', type: 'float', label: 'Block colour error', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'Corrupted blocks also take the wrong chroma, which is what makes digital breakup read as digital.' },
+      { key: 'glitch.posterize', type: 'float', label: 'Bit crush', min: 0, max: 1, step: 0.001, def: 0, hint: 'Collapses the luma to a few levels in bursts. Banding as a rhythmic event.' },
+      { key: 'glitch.invert', type: 'float', label: 'Polarity flip', min: 0, max: 1, step: 0.001, def: 0, hint: 'Bands of inverted video. A single frame of it is deeply unpleasant, which is the point.' },
     ],
   },
   {

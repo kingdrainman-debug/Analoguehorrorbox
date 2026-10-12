@@ -35,7 +35,8 @@ the reason the app exists.
 
 | | |
 |---|---|
-| **Picture Controls** | Brightness, contrast, colour, tint, sharpness — the knobs on the front of the set |
+| **Picture Controls** | Brightness, contrast, colour, tint, sharpness — the knobs on the front of the set — plus the source reconstruction filter used when rendering above the source resolution |
+| **Colour** | White-balance temperature and green/magenta, per-gun RGB gain and cutoff, hue rotation, saturation, vibrance, chroma crush, **colour killer** (a weak signal goes monochrome, as a real decoder did) and chroma overload that bleeds into luma |
 | **Signal & Reception** | RF / composite / S-Video / component paths, luma and chroma bandwidth, chroma delay, dot crawl, cross-colour rainbows, ringing, multipath ghosting, snow, adjacent-channel herringbone |
 | **Sync & Timebase** | Horizontal jitter with a coherence control, line tearing, flagging, head-switch band, vertical roll and hold instability, timebase wobble |
 | **Tube Geometry** | Curvature, corner radius, overscan, H/V size and position, pincushion, trapezoid, yoke rotation |
@@ -45,6 +46,7 @@ the reason the app exists.
 | **Convergence & Focus** | Per-gun RGB offsets, radial error that grows toward the corners, centre and edge defocus |
 | **Tube Response** | CRT gamma, black crush, white clip, drifting hum bar, AGC pumping, PSU sag, flicker |
 | **Faults & Wear** | Burn-in accumulation, dust and smears, moiré, degauss button, warm-up and power-off animation |
+| **Glitching** | Discrete failures on an event clock: tape dropout streaks, line repeat, sync slip, chroma bursts, macroblock corruption with colour error, bit crush and polarity flips. One **Event rate** control silences the whole section |
 
 ### Sound — the other half
 
@@ -180,12 +182,44 @@ The desktop build renders headlessly, so it drops into a batch script:
 crtbox --input clip.mp4 --output clip-crt.mp4 --preset failing
 
 crtbox --input clip.mp4 --output out.mov \
-       --format prores --fps 24 --scale 1.5 \
+       --format prores --fps 24 --resolution 1080p \
        --tube.humBar 0.45 --noise.flybackLevel -34 --audio.channelMode side
 ```
 
 Every one of the ~160 effect parameters is addressable as `--<group>.<param>`, using exactly
 the keys that appear in exported preset JSON. `crtbox --help` lists the rest.
+
+---
+
+## Output framing and upscaling
+
+**The frame is the shape of the tube.** Whatever you pick under Tube Geometry ▸
+Aspect is the aspect ratio of the exported file — a 16:9 source rendered as a
+4:3 set comes out 4:3, not 16:9 with the picture floating in the middle. The
+preview canvas is sized the same way, so if you see no black bars there are
+none in the file.
+
+**Resolution** sets the output height; the width follows from the aspect. Height
+is what is preserved rather than width, because line count, mask pitch and
+scanline structure are all vertical.
+
+| Source | Aspect | Resolution | File |
+|---|---|---|---|
+| 1920×1080 | 4:3 | Match source | 1440×1080 |
+| 1920×1080 | 16:9 | Match source | 1920×1080 |
+| 640×480 | 4:3 | 1080p | 1440×1080 (2.25× upscale) |
+| 640×480 | 4:3 | 2160p | 2880×2160 (4.5× upscale) |
+
+Upscaling is worth doing here in a way it usually is not. The signal chain runs
+at the source resolution, but the tube — scanlines, phosphor mask, bloom,
+convergence, curvature — is drawn at the output resolution, so all of that
+structure is *generated* crisply rather than stretched. What it cannot do is
+invent photographic detail the source never had; a 480p capture at 2160p is a
+480p capture rendered on a very good tube.
+
+Picture Controls ▸ **Source sampling** chooses how the source itself is read:
+Catmull-Rom bicubic by default, bilinear for the softer classic look, and
+nearest for pixel art, where a smooth upscale is simply wrong.
 
 ---
 

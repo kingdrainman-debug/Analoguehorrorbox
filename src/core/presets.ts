@@ -26,6 +26,8 @@ function preset(
  */
 export const PRESETS: Preset[] = [
   preset('reference', 'Reference Tube', 'A properly set-up studio monitor on component. Geometry and phosphor only — no signal damage. Start here when you want the CRT look without the decay.', {
+    'colour.temperature': 0.1,
+    'colour.chromaClip': 1.6,
     'signal.path': 'component',
     'signal.dotCrawl': 0,
     'signal.crossColor': 0,
@@ -70,6 +72,11 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('livingroom87', 'Living Room, 1987', 'A 21-inch consumer set fed from a VCR over composite. Slot mask, generous overscan, oversaturated from the factory, and one speaker firing at a carpet.', {
+    'colour.temperature': 0.35,
+    'colour.saturation': 1.08,
+    'colour.blueLift': 0.01,
+    'colour.chromaCrush': 0.12,
+    'colour.chromaClip': 1.2,
     'picture.color': 1.2,
     'picture.tint': -4,
     'signal.path': 'composite',
@@ -101,6 +108,19 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('vhs3rd', 'Third-Generation Tape', 'A copy of a copy of a copy. The timebase has given up, the chroma is a suggestion, and the transport is audibly worn out.', {
+    'colour.temperature': 0.2,
+    'colour.tintGM': 0.12,
+    'colour.saturation': 0.82,
+    'colour.chromaCrush': 0.42,
+    'colour.colourKiller': 0.22,
+    'colour.chromaClip': 0.95,
+    'glitch.enabled': true,
+    'glitch.rate': 0.45,
+    'glitch.dropout': 0.5,
+    'glitch.dropoutLength': 0.22,
+    'glitch.lineRepeat': 0.3,
+    'glitch.syncSlip': 0.25,
+    'glitch.chromaBurst': 0.35,
     'picture.contrast': 1.08,
     'picture.color': 0.85,
     'signal.path': 'composite',
@@ -149,6 +169,15 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('rebroadcast', 'Weak Rebroadcast', 'Received off-air through a set-top aerial pointing the wrong way. Multipath ghosts, a beating adjacent carrier, and static creeping in under everything.', {
+    'colour.temperature': 0.3,
+    'colour.saturation': 0.9,
+    'colour.chromaCrush': 0.3,
+    'colour.colourKiller': 0.35,
+    'glitch.enabled': true,
+    'glitch.rate': 0.3,
+    'glitch.dropout': 0.18,
+    'glitch.syncSlip': 0.35,
+    'glitch.chromaBurst': 0.3,
     'signal.path': 'rf',
     'signal.snow': 0.3,
     'signal.snowSize': 1.2,
@@ -176,6 +205,18 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('failing', 'Failing Set', 'Dry joints, a tired line-output stage and a vertical hold that will not. Turn the flyback whine up and leave the room.', {
+    'colour.temperature': 0.45,
+    'colour.tintGM': 0.3,
+    'colour.greenGain': 1.08,
+    'colour.blueLift': 0.03,
+    'colour.chromaClip': 0.85,
+    'glitch.enabled': true,
+    'glitch.rate': 0.6,
+    'glitch.dropout': 0.3,
+    'glitch.lineRepeat': 0.45,
+    'glitch.syncSlip': 0.6,
+    'glitch.chromaBurst': 0.4,
+    'glitch.invert': 0.12,
     'picture.brightness': 0.06,
     'picture.contrast': 1.15,
     'signal.path': 'composite',
@@ -224,6 +265,10 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('portable', 'Kitchen Portable', 'A 5-inch set on top of a fridge. Tiny tube, tiny speaker, mains hum through everything, and a picture you have to stand in front of.', {
+    'colour.temperature': 0.5,
+    'colour.saturation': 0.88,
+    'colour.chromaCrush': 0.25,
+    'colour.colourKiller': 0.3,
     'picture.contrast': 1.1,
     'picture.color': 0.9,
     'signal.path': 'rf',
@@ -258,6 +303,10 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('cctv', 'Security Monitor', 'A 9-inch monochrome-ish monitor that has watched the same corridor for eleven years. Long persistence, heavy burn-in, no colour worth speaking of.', {
+    'colour.temperature': 0.15,
+    'colour.saturation': 0.18,
+    'colour.colourKiller': 0.7,
+    'colour.chromaCrush': 0.5,
     'picture.color': 0.18,
     'picture.contrast': 1.2,
     'signal.path': 'composite',
@@ -288,6 +337,10 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('arcade', 'Arcade Monitor', 'A well-driven 15 kHz arcade tube: aperture grille, hard 240p lines, and enough beam current to bloom. Signal path stays clean.', {
+    'colour.temperature': -0.1,
+    'colour.saturation': 1.12,
+    'colour.vibrance': 0.15,
+    'colour.chromaClip': 1.5,
     'picture.contrast': 1.12,
     'picture.color': 1.15,
     'signal.path': 'svideo',
@@ -322,6 +375,19 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('transmission', 'Late Transmission', 'Something is being broadcast that should not be. Rolling hum bar locked to the hum, static bleeding into both, and a transport that keeps losing its grip.', {
+    'colour.temperature': 0.3,
+    'colour.tintGM': 0.18,
+    'colour.saturation': 0.85,
+    'colour.chromaCrush': 0.35,
+    'colour.chromaClip': 0.9,
+    'glitch.enabled': true,
+    'glitch.rate': 0.55,
+    'glitch.dropout': 0.4,
+    'glitch.lineRepeat': 0.35,
+    'glitch.syncSlip': 0.5,
+    'glitch.chromaBurst': 0.45,
+    'glitch.posterize': 0.2,
+    'glitch.invert': 0.15,
     'picture.brightness': -0.05,
     'picture.contrast': 1.18,
     'picture.color': 0.72,
@@ -387,6 +453,14 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('lostsignal', 'Lost Signal', 'No lock. Full snow, full roar, and the hum still there underneath because the set is still on.', {
+    'colour.saturation': 0.5,
+    'colour.colourKiller': 0.6,
+    'glitch.enabled': true,
+    'glitch.rate': 0.8,
+    'glitch.dropout': 0.6,
+    'glitch.lineRepeat': 0.5,
+    'glitch.syncSlip': 0.7,
+    'glitch.chromaBurst': 0.5,
     'signal.path': 'rf',
     'signal.signalLoss': 1,
     'signal.snow': 0.5,

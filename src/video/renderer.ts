@@ -359,6 +359,20 @@ export class CrtRenderer {
       u.f('u_vHold', num(s, 'sync.vHold'));
       u.f('u_timebaseWobble', num(s, 'sync.timebaseWobble'));
 
+      const glitchOn = bool(s, 'glitch.enabled');
+      u.f('u_glitchOn', glitchOn ? 1 : 0);
+      u.f('u_glitchRate', num(s, 'glitch.rate'));
+      u.f('u_dropout', num(s, 'glitch.dropout'));
+      u.f('u_dropoutLength', num(s, 'glitch.dropoutLength'));
+      u.f('u_lineRepeat', num(s, 'glitch.lineRepeat'));
+      u.f('u_syncSlip', num(s, 'glitch.syncSlip'));
+      u.f('u_chromaBurst', num(s, 'glitch.chromaBurst'));
+      u.f('u_blockCorrupt', num(s, 'glitch.blockCorrupt'));
+      u.f('u_blockSize', num(s, 'glitch.blockSize'));
+      u.f('u_blockColour', num(s, 'glitch.blockColour'));
+      u.f('u_posterize', num(s, 'glitch.posterize'));
+      u.f('u_invert', num(s, 'glitch.invert'));
+
       this.draw(p, this.signalT);
     }
 
@@ -489,6 +503,31 @@ export class CrtRenderer {
       u.f('u_maskNorm', maskNormalisation(code(s, 'phosphor.maskType'), num(s, 'phosphor.maskPitch'), num(s, 'phosphor.slotStagger')));
       u.f('u_slotStagger', num(s, 'phosphor.slotStagger'));
       u.f('u_gamut', num(s, 'phosphor.gamut'));
+
+      const colourOn = bool(s, 'colour.enabled');
+      u.f('u_colourOn', colourOn ? 1 : 0);
+      u.f('u_temperature', num(s, 'colour.temperature'));
+      u.f('u_tintGM', num(s, 'colour.tintGM'));
+      u.v3(
+        'u_gunGain',
+        num(s, 'colour.redGain'),
+        num(s, 'colour.greenGain'),
+        num(s, 'colour.blueGain'),
+      );
+      u.v3(
+        'u_gunLift',
+        num(s, 'colour.redLift'),
+        num(s, 'colour.greenLift'),
+        num(s, 'colour.blueLift'),
+      );
+      u.f('u_hue', num(s, 'colour.hue'));
+      u.f('u_saturation', num(s, 'colour.saturation'));
+      u.f('u_vibrance', num(s, 'colour.vibrance'));
+      u.f('u_chromaCrush', num(s, 'colour.chromaCrush'));
+      u.f('u_colourKiller', num(s, 'colour.colourKiller'));
+      u.f('u_chromaClip', num(s, 'colour.chromaClip'));
+
+      u.f('u_reconstruct', code(s, 'picture.reconstruct'));
 
       u.f('u_glowOn', glowOn ? 1 : 0);
       u.f('u_bloomAmount', num(s, 'glow.bloom'));
