@@ -35,6 +35,7 @@ import { startRecording } from './export/recorder';
 import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
 import { desktop, isBatchMode, saveBlob } from './platform/desktop';
 import { outputSize, tubeAspect, upscaleFactor } from './core/output';
+import { Guide, shouldShowOnStartup } from './ui/Guide';
 
 type Tab = 'video' | 'audio' | 'link';
 
@@ -59,6 +60,8 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
   const [tab, setTab] = useState<Tab>('video');
   const [advanced, setAdvanced] = useState(false);
+  // Batch renders have no user and must never block on a dialog.
+  const [guideOpen, setGuideOpen] = useState(() => !isBatchMode && shouldShowOnStartup());
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const out: Record<string, boolean> = {};
     for (const g of GROUPS) out[g.id] = ['picture', 'signal', 'beam', 'audio', 'speaker', 'link'].includes(g.id);
@@ -1034,6 +1037,13 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // F1 works even from a field, because it is the one key you reach for
+      // precisely when you do not know where you are.
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setGuideOpen((v) => !v);
+        return;
+      }
       const target = e.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       if (e.code === 'Space') {
@@ -1139,6 +1149,14 @@ export default function App() {
             <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
             Advanced
           </label>
+
+          <button
+            className="guide-btn"
+            onClick={() => setGuideOpen(true)}
+            title="How to load footage, what the reference tubes are, and how to build a look (F1)"
+          >
+            Guide
+          </button>
         </div>
       </header>
 
@@ -1267,6 +1285,12 @@ export default function App() {
                   Nothing is uploaded anywhere — decoding, processing and export all happen on this
                   machine.
                 </p>
+                {/* The empty stage is where someone who has no idea what this
+                    is will look first, so the way out of not knowing belongs
+                    here rather than only in the header. */}
+                <button className="dropzone-guide" onClick={() => setGuideOpen(true)}>
+                  New here? Open the guide
+                </button>
               </div>
             )}
             {media?.kind === 'video' && !audioArmed && (
@@ -1392,6 +1416,13 @@ export default function App() {
         </div>
       )}
 
+      {guideOpen && (
+        <Guide
+          onClose={() => setGuideOpen(false)}
+          onPickPreset={applyPreset}
+          onOpenMedia={openViaDialog}
+        />
+      )}
     </div>
   );
 }

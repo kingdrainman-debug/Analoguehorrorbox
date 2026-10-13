@@ -896,6 +896,138 @@ if (sections.error) {
   }
 }
 
+/* -------- 10. the guide and the information widgets -------- */
+
+/*
+ * The guide is the first thing a new user sees, so a regression that leaves it
+ * stuck open, impossible to close, or never shown at all is a bad one. This
+ * drives the whole lifecycle through the real controls: shown on first run,
+ * closes, reopens from the header, remembers "don't show" across a reload, and
+ * F1 brings it back.
+ *
+ * Then it opens a parameter's ⓘ and a section's ⓘ and asserts real text
+ * appears, which is the half that check-help.mjs cannot see — the data can be
+ * complete while the widget fails to render it.
+ */
+
+const guide = await (async () => {
+  const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const out = {
+    shownOnStart: false,
+    closed: false,
+    reopened: false,
+    hiddenAfterReload: false,
+    f1Reopened: false,
+    tubes: 0,
+    paramInfo: '',
+    sectionInfo: '',
+    error: null,
+  };
+  try {
+    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+    await p.waitForTimeout(1500);
+
+    out.shownOnStart = (await p.$('.guide')) !== null;
+
+    // Close with the × and confirm it is gone.
+    await p.evaluate(() => document.querySelector('.guide-close')?.click());
+    await p.waitForTimeout(400);
+    out.closed = (await p.$('.guide')) === null;
+
+    // Reopen from the header.
+    await p.evaluate(() =>
+      [...document.querySelectorAll('button')].find((b) => b.textContent === 'Guide')?.click(),
+    );
+    await p.waitForTimeout(400);
+    out.reopened = (await p.$('.guide')) !== null;
+
+    // Count the reference tubes offered.
+    out.tubes = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      [...document.querySelectorAll('.guide-tabs button')]
+        .find((b) => b.textContent.includes('Reference'))
+        ?.click();
+      await sleep(250);
+      return document.querySelectorAll('.guide-tube').length;
+    });
+
+    // Tick "don't show", close, reload: it must stay shut.
+    await p.evaluate(() => {
+      const box = document.querySelector('.guide-foot .check input');
+      if (box && !box.checked) box.click();
+    });
+    await p.waitForTimeout(250);
+    await p.evaluate(() => document.querySelector('.guide-close')?.click());
+    await p.reload({ waitUntil: 'load' });
+    await p.waitForTimeout(1500);
+    out.hiddenAfterReload = (await p.$('.guide')) === null;
+
+    // F1 brings it back, and closes it again.
+    await p.keyboard.press('F1');
+    await p.waitForTimeout(400);
+    out.f1Reopened = (await p.$('.guide')) !== null;
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(400);
+
+    // Information widgets.
+    const info = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const sect = (t) =>
+        [...document.querySelectorAll('.group')].find(
+          (g) => g.querySelector('.group-title')?.textContent === t,
+        );
+      const beam = sect('Beam & Scanlines');
+      if (!beam) throw new Error('no Beam & Scanlines section');
+      beam.querySelector('.group-info-btn').click();
+      if (!beam.classList.contains('open')) beam.querySelector('.group-toggle').click();
+      await sleep(400);
+
+      const row = [...document.querySelectorAll('.param')].find(
+        (r) => r.querySelector('.param-label')?.textContent === 'Beam blooming',
+      );
+      if (!row) throw new Error('no Beam blooming parameter');
+      row.querySelector('.param-info-btn').click();
+      await sleep(400);
+
+      return {
+        section: document.querySelector('.group-info')?.textContent?.trim() ?? '',
+        param: row.querySelector('.param-info')?.textContent?.trim() ?? '',
+      };
+    });
+    out.sectionInfo = info.section;
+    out.paramInfo = info.param;
+  } catch (err) {
+    out.error = String(err);
+  }
+  await p.close();
+  return out;
+})();
+
+if (guide.error) {
+  failures.push(`guide: ${guide.error}`);
+} else {
+  if (!guide.shownOnStart) failures.push('guide: not shown on first run');
+  if (!guide.closed) failures.push('guide: the close button did not close it');
+  if (!guide.reopened) failures.push('guide: the header button did not reopen it');
+  if (guide.tubes < 5) {
+    failures.push(`guide: only ${guide.tubes} reference tubes listed, expected all of them`);
+  }
+  if (!guide.hiddenAfterReload) {
+    failures.push('guide: "don\'t show on startup" did not survive a reload');
+  }
+  if (!guide.f1Reopened) failures.push('guide: F1 did not reopen it');
+  if (guide.paramInfo.length < 80) {
+    failures.push(
+      `guide: a parameter's ⓘ revealed only ${guide.paramInfo.length} characters — the widget is not showing its help`,
+    );
+  }
+  if (guide.sectionInfo.length < 150) {
+    failures.push(
+      `guide: a section's ⓘ revealed only ${guide.sectionInfo.length} characters`,
+    );
+  }
+}
+
 await browser.close();
 server.close();
 
@@ -932,3 +1064,6 @@ console.log(
   `  colour    saturation ${sections.satFull.toFixed(2)} → ${sections.satZero.toFixed(2)} at zero · temperature B−R ${sections.warmRB.toFixed(0)} → ${sections.coldRB.toFixed(0)}`,
 );
 console.log(`  glitch    ${sections.glitchOnVsOff.toFixed(1)} per-pixel change when switched on`);
+console.log(
+  `  guide     shown on start, closes, reopens, ${guide.tubes} tubes · ⓘ reveals ${guide.paramInfo.length} chars (param) / ${guide.sectionInfo.length} (section)`,
+);

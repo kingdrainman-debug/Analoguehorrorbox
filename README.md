@@ -60,6 +60,23 @@ the reason the app exists.
 | **Crackle & Contact Faults** | Poisson events with power-law amplitudes, randomised tone per click, and a burst process for arcing joints |
 | **A/V Link** | Hum bar ↔ hum, signal loss ↔ static, audio → brightness and bloom, picture glitch → dropout, degauss → thump, power state → audio |
 
+### Finding your way around
+
+The app opens on a **guide** covering how to get footage in, what each reference
+tube is for, and how to build and animate a look. Close it with Esc or the ✕;
+tick *Don't show this when CRTBOX opens* if you don't want it again. The
+**Guide** button in the header, or <kbd>F1</kbd>, brings it back at any time.
+
+Every parameter and every section carries an **ⓘ**. It opens an inline panel
+explaining what the control physically is, what each end of its range looks
+like, and when to reach for it, along with the range, the default and the
+parameter's key for scripting. Section explainers also give the practical
+advice — which two or three controls in that section actually matter.
+
+That help is a single source of truth in `src/core/help.ts`, and
+`npm run help:check` fails the build if a parameter exists without an
+explanation, so no control can ship undocumented.
+
 ### Timeline & keyframes
 
 Every one of the ~160 parameters can be animated over time, which is what turns

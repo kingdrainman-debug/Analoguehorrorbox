@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { DEFAULTS, Group, ParamValue, Settings } from '../core/params';
+import { SECTION_HELP } from '../core/help';
 import { Timeline, isAnimated, indexAt } from '../core/timeline';
 import { ParamControl } from './ParamControl';
 
@@ -31,8 +32,10 @@ export function GroupPanel({
   onToggleAnimate,
   onAddKeyframe,
 }: Props) {
+  const [info, setInfo] = useState(false);
   const enableKey = group.enableKey;
   const enabled = enableKey ? settings[enableKey] === true : true;
+  const help = SECTION_HELP[group.id];
 
   const visible = useMemo(
     () => group.params.filter((p) => p.key !== enableKey && (advanced || !p.advanced)),
@@ -56,6 +59,14 @@ export function GroupPanel({
         </button>
         <div className="group-actions">
           <button
+            className={`ghost group-info-btn${info ? ' on' : ''}`}
+            onClick={() => setInfo((v) => !v)}
+            aria-expanded={info}
+            title={info ? 'Hide the explanation' : `What is ${group.label} for?`}
+          >
+            ⓘ
+          </button>
+          <button
             className="ghost"
             onClick={() => onReset(group.id)}
             disabled={!modified}
@@ -75,6 +86,20 @@ export function GroupPanel({
           )}
         </div>
       </header>
+
+      {/*
+        The section explainer sits outside the open/closed body on purpose: you
+        often want to know what a section is for while deciding whether to open
+        it at all.
+      */}
+      {info && help && (
+        <div className="group-info">
+          <p>{help.what}</p>
+          <p className="how">
+            <strong>In practice.</strong> {help.how}
+          </p>
+        </div>
+      )}
 
       {open && (
         <div className="group-body">

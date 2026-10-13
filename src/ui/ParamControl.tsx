@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Param, ParamValue } from '../core/params';
+import { PARAM_HELP } from '../core/help';
 
 interface Props {
   param: Param;
@@ -79,6 +80,61 @@ function format(param: Param, value: number): string {
   return value.toFixed(decimals).replace(/\.?0+$/, '') || '0';
 }
 
+/**
+ * The one-line summary of what a control's numbers actually are.
+ *
+ * Knowing the range and the default turns a slider from a thing you drag until
+ * it looks right into a thing you can reason about, and it is information the
+ * UI otherwise hides — the handle position tells you nothing about the scale.
+ */
+function facts(param: Param): string {
+  const unit = 'unit' in param && param.unit ? ` ${param.unit}` : '';
+  switch (param.type) {
+    case 'bool':
+      return `Default: ${param.def ? 'on' : 'off'}`;
+    case 'enum': {
+      const current = param.options.find((o) => o.value === param.def);
+      return `${param.options.length} options · default ${current?.label ?? param.def}`;
+    }
+    default:
+      return `Range ${format(param, param.min)} to ${format(param, param.max)}${unit} · default ${format(param, param.def)}${unit}${param.type === 'float' && param.log ? ' · logarithmic' : ''}`;
+  }
+}
+
+/**
+ * The ⓘ affordance and the panel it opens.
+ *
+ * Deliberately a disclosure rather than a tooltip: these explanations run to
+ * several sentences, and a native tooltip truncates, cannot be read at leisure
+ * and vanishes the moment the pointer moves. The short `hint` is still on the
+ * row as a tooltip for a quick hover.
+ */
+function InfoToggle({ open, onToggle }: { open: boolean; onToggle(): void }) {
+  return (
+    <button
+      className={`param-info-btn${open ? ' on' : ''}`}
+      onClick={onToggle}
+      aria-expanded={open}
+      title={open ? 'Hide the explanation' : 'What does this do?'}
+    >
+      ⓘ
+    </button>
+  );
+}
+
+function InfoPanel({ param }: { param: Param }) {
+  const detail = PARAM_HELP[param.key];
+  return (
+    <div className="param-info">
+      {detail && <p>{detail}</p>}
+      <p className="param-facts">
+        {facts(param)}
+        <code>{param.key}</code>
+      </p>
+    </div>
+  );
+}
+
 export function ParamControl({
   param,
   value,
@@ -90,6 +146,7 @@ export function ParamControl({
   onAddKeyframe,
 }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [info, setInfo] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const commitText = useCallback(
@@ -119,9 +176,12 @@ export function ParamControl({
     />
   );
 
+  const infoToggle = <InfoToggle open={info} onToggle={() => setInfo((v) => !v)} />;
+  const infoPanel = info ? <InfoPanel param={param} /> : null;
+
   if (param.type === 'bool') {
     return (
-      <div className={`param param-bool${animated ? ' animated' : ''}`} title={param.hint}>
+      <div className={`param param-bool${animated ? ' animated' : ''}${info ? ' showing-info' : ''}`} title={param.hint}>
         <label>
           <input
             type="checkbox"
@@ -130,16 +190,22 @@ export function ParamControl({
           />
           <span className="param-label">{param.label}</span>
         </label>
+        {infoToggle}
         {animControls}
+        {infoPanel}
       </div>
     );
   }
 
   if (param.type === 'enum') {
     return (
-      <div className={`param param-enum${animated ? ' animated' : ''}`} title={param.hint}>
+      <div
+        className={`param param-enum${animated ? ' animated' : ''}${info ? ' showing-info' : ''}`}
+        title={param.hint}
+      >
         <div className="param-head">
           <span className="param-label">{param.label}</span>
+          {infoToggle}
           {animControls}
           <button className="reset" onClick={reset} disabled={isDefault} title="Reset to default">
             ⟲
@@ -155,6 +221,7 @@ export function ParamControl({
         {param.options.find((o) => o.value === value)?.hint && (
           <p className="param-hint">{param.options.find((o) => o.value === value)?.hint}</p>
         )}
+        {infoPanel}
       </div>
     );
   }
@@ -168,11 +235,12 @@ export function ParamControl({
 
   return (
     <div
-      className={`param param-number${isDefault ? '' : ' modified'}${animated ? ' animated' : ''}`}
+      className={`param param-number${isDefault ? '' : ' modified'}${animated ? ' animated' : ''}${info ? ' showing-info' : ''}`}
       title={param.hint}
     >
       <div className="param-head">
         <span className="param-label">{param.label}</span>
+        {infoToggle}
         {animControls}
         <span className="param-value">
           {editing !== null ? (
@@ -211,6 +279,7 @@ export function ParamControl({
         }}
         onDoubleClick={reset}
       />
+      {infoPanel}
     </div>
   );
 }

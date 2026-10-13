@@ -1012,3 +1012,382 @@ input[type='range']:disabled::-webkit-slider-thumb {
     display: none;
   }
 }
+
+/* ---------------- information widgets ---------------- */
+
+/*
+  The ⓘ affordance. Dim until hovered so a sidebar of 100 controls does not
+  become a wall of icons, but always present rather than appearing on hover —
+  a control that only exists when the pointer is over it cannot be discovered.
+*/
+.param-info-btn,
+.group-info-btn {
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--muted);
+  opacity: 0.45;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 3px;
+  cursor: pointer;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.param:hover .param-info-btn,
+.group:hover .group-info-btn {
+  opacity: 0.8;
+}
+
+.param-info-btn:hover,
+.group-info-btn:hover,
+.param-info-btn.on,
+.group-info-btn.on {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.param.showing-info {
+  background: var(--panel-2);
+  border-radius: var(--radius);
+}
+
+.param-info,
+.group-info {
+  border-left: 2px solid var(--accent-dim);
+  margin: 6px 0 2px;
+  padding: 2px 0 2px 9px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  /* Explanations are for reading, so let them be selected and copied. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.param-info p,
+.group-info p {
+  margin: 0 0 6px;
+}
+
+.param-info p:last-child,
+.group-info p:last-child {
+  margin-bottom: 0;
+}
+
+.param-facts {
+  color: var(--muted);
+  font-size: 10.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.param-facts code {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent-dim);
+  margin-left: auto;
+}
+
+.group-info {
+  margin: 0 12px 10px;
+  padding-left: 10px;
+}
+
+.group-info .how strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------------- guide ---------------- */
+
+.guide-btn {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.guide-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 24px;
+}
+
+.guide {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  width: min(840px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.guide-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.guide-head .logo {
+  color: var(--accent);
+  font-size: 22px;
+  letter-spacing: -3px;
+  line-height: 1;
+}
+
+.guide-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.guide-title h1 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+.guide-title p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.guide-close:hover {
+  color: var(--text);
+}
+
+.guide-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  padding: 0 10px;
+  gap: 2px;
+}
+
+.guide-tabs button {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 9px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guide-tabs button:hover {
+  color: var(--text);
+}
+
+.guide-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.guide-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  font-size: 12.5px;
+  line-height: 1.68;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.guide-body h2 {
+  margin: 18px 0 7px;
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.guide-body h2:first-child {
+  margin-top: 0;
+}
+
+.guide-body p {
+  margin: 0 0 9px;
+  max-width: 74ch;
+}
+
+.guide-body em {
+  color: var(--text);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.guide-body code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.guide-body kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 4px;
+  background: var(--panel-2);
+}
+
+.guide-steps {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  max-width: 74ch;
+}
+
+.guide-steps li {
+  margin-bottom: 7px;
+}
+
+.guide-inline {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--accent-dim);
+  border-radius: 0;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.guide-tubes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.guide-tube {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.guide-tube:hover {
+  border-color: var(--accent-dim);
+  background: #22262a;
+}
+
+.guide-tube strong {
+  font-size: 12.5px;
+}
+
+.guide-tube span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.guide-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 0 0 10px 10px;
+  flex-wrap: wrap;
+}
+
+.guide-foot .check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.guide-foot .check:hover {
+  color: var(--text);
+}
+
+.guide-reopen {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.guide-reopen strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guide-foot .primary {
+  padding: 6px 20px;
+}
+
+/* A narrow window puts the guide edge to edge rather than letting it scroll
+   sideways. */
+@media (max-width: 720px) {
+  .guide-backdrop {
+    padding: 0;
+  }
+
+  .guide {
+    border-radius: 0;
+    border: none;
+    height: 100%;
+  }
+
+  .guide-foot {
+    border-radius: 0;
+  }
+
+  .guide-reopen {
+    display: none;
+  }
+}
+
+.dropzone-guide {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--accent-dim);
+  border-radius: 0;
+  color: var(--accent);
+  padding: 0 0 1px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.dropzone-guide:hover {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
