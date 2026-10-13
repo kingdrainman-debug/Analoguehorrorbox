@@ -1,7 +1,7 @@
 {
   "name": "crtbox",
   "productName": "CRTBOX",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A real-time CRT television emulator for video and audio. Standalone app + web app.",
   "license": "MIT",
   "private": true,
@@ -49,7 +49,7 @@
   "build": {
     "appId": "rs.crtbox.app",
     "productName": "CRTBOX",
-    "copyright": "Copyright \u00a9 2026 CRTBOX contributors",
+    "copyright": "Copyright © 2026 CRTBOX contributors",
     "directories": {
       "output": "release",
       "buildResources": "build"
