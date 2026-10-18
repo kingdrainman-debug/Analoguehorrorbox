@@ -1180,20 +1180,40 @@ export default function App() {
             Advanced
           </label>
 
-          <label
-            className="inline"
-            title="Which rasteriser draws the picture. Automatic uses the GPU and falls back to the CPU if there is not a usable one."
+          {/*
+            A segmented toggle rather than a dropdown: there are only three
+            choices, switching backend is something you do to compare rather
+            than to configure once, and a dropdown costs two clicks to do it.
+            The active backend is marked, because "Auto" alone does not tell
+            you which one you actually got.
+          */}
+          <div
+            className="backend-toggle"
+            role="group"
+            aria-label="Rendering backend"
+            title="Which rasteriser draws the picture. Auto uses the GPU and falls back to the CPU when there is not a usable one."
           >
-            <select
-              className="backend-select"
-              value={backendChoice}
-              onChange={(e) => chooseBackend(e.target.value as BackendChoice)}
-            >
-              <option value="auto">Auto ({backendKind.toUpperCase()})</option>
-              <option value="gpu">GPU</option>
-              <option value="cpu">CPU</option>
-            </select>
-          </label>
+            {(
+              [
+                ['auto', 'Auto', 'Use the GPU, fall back to the CPU if there is not a usable one'],
+                ['gpu', 'GPU', 'Force WebGL2. Fast, and fails if the machine cannot do it'],
+                ['cpu', 'CPU', 'Force JavaScript. Works anywhere, identical everywhere, much slower'],
+              ] as [BackendChoice, string, string][]
+            ).map(([value, label, title]) => (
+              <button
+                key={value}
+                className={`${backendChoice === value ? 'active' : ''}${
+                  backendChoice === 'auto' && value === backendKind ? ' resolved' : ''
+                }`}
+                aria-pressed={backendChoice === value}
+                data-backend={value}
+                onClick={() => chooseBackend(value)}
+                title={title}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           <button
             className="guide-btn"

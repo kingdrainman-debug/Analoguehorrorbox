@@ -1392,16 +1392,58 @@ input[type='range']:disabled::-webkit-slider-thumb {
   border-bottom-color: var(--text);
 }
 
-.backend-select {
-  font: inherit;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--panel-2);
+/*
+  Backend toggle. Three segments in one pill, so which one is live is visible
+  without opening anything.
+*/
+.backend-toggle {
+  display: inline-flex;
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 2px 4px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel-2);
 }
 
-.backend-select:hover {
+.backend-toggle button {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 9px;
+  cursor: pointer;
+  position: relative;
+}
+
+.backend-toggle button + button {
+  border-left: 1px solid var(--line);
+}
+
+.backend-toggle button:hover {
   color: var(--text);
+  background: #22262a;
+}
+
+.backend-toggle button.active {
+  color: #16180a;
+  background: var(--accent);
+  font-weight: 600;
+}
+
+/*
+  Under Auto, mark which backend actually won. A dot rather than another
+  highlight, so it reads as information and not as a second selection.
+*/
+.backend-toggle button.resolved::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
 }

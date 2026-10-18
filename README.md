@@ -84,7 +84,8 @@ instead of standing still. Both are asserted by the smoke test.
 
 ### Two renderers
 
-The chain can be rasterised two ways, chosen from the dropdown in the header.
+The chain can be rasterised two ways, chosen with the **Auto / GPU / CPU**
+toggle in the header. Under Auto, a dot marks which backend actually won.
 
 | | |
 |---|---|

@@ -1320,7 +1320,7 @@ if (tapeEngine.error) {
  */
 
 const cpuBackend = await (async () => {
-  const out = { gpuMean: 0, cpuMean: 0, gpuLit: 0, cpuLit: 0, perPixel: 0, selected: '', error: null };
+  const out = { gpuMean: 0, cpuMean: 0, gpuLit: 0, cpuLit: 0, perPixel: 0, selected: '', toggle: [], error: null };
 
   const grab = async (backend) => {
     const p = await browser.newPage({ viewport: { width: 1100, height: 820 } });
@@ -1404,7 +1404,10 @@ const cpuBackend = await (async () => {
         px: Array.from(d),
         mean: sum / (d.length / 4),
         lit: lit / (probe.width * probe.height),
-        selected: document.querySelector('.backend-select')?.value ?? '',
+        selected:
+          document.querySelector('.backend-toggle button.active')?.dataset.backend ?? '',
+        resolved:
+          document.querySelector('.backend-toggle button.resolved')?.dataset.backend ?? '',
       };
     });
     await p.close();
@@ -1414,6 +1417,37 @@ const cpuBackend = await (async () => {
   try {
     const g = await grab('gpu');
     const c = await grab('cpu');
+    out.toggle = await (async () => {
+      // Start on Auto and click through the segments, checking each takes.
+      const p = await browser.newPage({ viewport: { width: 1100, height: 820 } });
+      await p.addInitScript(() => {
+        try {
+          localStorage.removeItem('crtbox.backend');
+          localStorage.setItem('crtbox.guide.hideOnStart', '1');
+        } catch {
+          /* private window */
+        }
+      });
+      await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+      await p.waitForTimeout(1500);
+      const seen = await p.evaluate(async () => {
+        const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
+        const seg = (b) => document.querySelector(`.backend-toggle button[data-backend="${b}"]`);
+        const active = () => document.querySelector('.backend-toggle button.active')?.dataset.backend;
+        const order = [];
+        order.push(`start:${active()}`);
+        for (const b of ['cpu', 'gpu', 'auto']) {
+          seg(b)?.click();
+          await sleep(900);
+          order.push(`${b}:${active()}`);
+        }
+        // Auto must still mark which backend actually won.
+        order.push(`resolved:${document.querySelector('.backend-toggle button.resolved')?.dataset.backend}`);
+        return order;
+      });
+      await p.close();
+      return seen;
+    })();
     if (c.errs.length) throw new Error(`CPU backend threw: ${c.errs[0]}`);
     out.gpuMean = g.mean;
     out.cpuMean = c.mean;
@@ -1437,7 +1471,17 @@ if (cpuBackend.error) {
   failures.push(`cpu backend: ${cpuBackend.error}`);
 } else {
   if (cpuBackend.selected !== 'cpu') {
-    failures.push(`cpu backend: the selector reads "${cpuBackend.selected}", so the choice did not take`);
+    failures.push(`cpu backend: the toggle reads "${cpuBackend.selected}", so the choice did not take`);
+  }
+  const want = ['start:auto', 'cpu:cpu', 'gpu:gpu', 'auto:auto'];
+  const got = cpuBackend.toggle.slice(0, 4).join(' ');
+  if (got !== want.join(' ')) {
+    failures.push(`backend toggle: clicking through gave "${got}", expected "${want.join(' ')}"`);
+  }
+  if (!/^resolved:(gpu|cpu)$/.test(cpuBackend.toggle[4] ?? '')) {
+    failures.push(
+      `backend toggle: on Auto, neither segment is marked as the one actually in use (${cpuBackend.toggle[4]})`,
+    );
   }
   if (cpuBackend.cpuLit < 0.3) {
     failures.push(`cpu backend: only ${(cpuBackend.cpuLit * 100).toFixed(1)}% of the frame is lit — it is not rendering`);
@@ -1497,6 +1541,7 @@ console.log(
 console.log(
   `  cpu       mean ${cpuBackend.cpuMean.toFixed(1)} vs GPU ${cpuBackend.gpuMean.toFixed(1)} · ${cpuBackend.perPixel.toFixed(1)}/px apart · ${(cpuBackend.cpuLit * 100).toFixed(1)}% lit`,
 );
+console.log(`  toggle    ${cpuBackend.toggle.join('  ')}`);
 console.log(
   `  tape      cross-colour ${tapeEngine.rainbowBox.toFixed(3)} box vs ${tapeEngine.rainbowComb.toFixed(3)} comb · dot crawl ${tapeEngine.crawlMoves.toFixed(1)} moving vs ${tapeEngine.staticPhase.toFixed(1)} static · SP→EP ${tapeEngine.spVsEp.toFixed(1)}/px`,
 );
