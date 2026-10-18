@@ -26,6 +26,10 @@ function preset(
  */
 export const PRESETS: Preset[] = [
   preset('reference', 'Reference Tube', 'A properly set-up studio monitor on component. Geometry and phosphor only — no signal damage. Start here when you want the CRT look without the decay.', {
+    'composite.enabled': false,
+    'tape.enabled': false,
+    'vnoise.enabled': false,
+    'headswitch.enabled': false,
     'colour.temperature': 0.1,
     'colour.chromaClip': 1.6,
     'signal.path': 'component',
@@ -72,6 +76,13 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('livingroom87', 'Living Room, 1987', 'A 21-inch consumer set fed from a VCR over composite. Slot mask, generous overscan, oversaturated from the factory, and one speaker firing at a carpet.', {
+    'composite.demodulation': 'notch',
+    'composite.phaseShift': '180',
+    'tape.speed': 'sp',
+    'tape.sharpen': 1.6,
+    'tape.edgeWave': 0.8,
+    'vnoise.chromaNoise': 0.06,
+    'headswitch.height': 8,
     'colour.temperature': 0.35,
     'colour.saturation': 1.08,
     'colour.blueLift': 0.01,
@@ -108,6 +119,19 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('vhs3rd', 'Third-Generation Tape', 'A copy of a copy of a copy. The timebase has given up, the chroma is a suggestion, and the transport is audibly worn out.', {
+    'composite.demodulation': 'box',
+    'composite.chromaLowpassIn': 0.75,
+    'composite.chromaPhaseError': 0.06,
+    'tape.speed': 'ep',
+    'tape.chromaLoss': 0.22,
+    'tape.sharpen': 2.4,
+    'tape.edgeWave': 3.5,
+    'vnoise.compositeNoise': 0.05,
+    'vnoise.chromaNoise': 0.22,
+    'vnoise.chromaPhaseNoise': 0.08,
+    'headswitch.height': 14,
+    'headswitch.shift': 90,
+    'headswitch.tracking': 0.25,
     'colour.temperature': 0.2,
     'colour.tintGM': 0.12,
     'colour.saturation': 0.82,
@@ -169,6 +193,12 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('rebroadcast', 'Weak Rebroadcast', 'Received off-air through a set-top aerial pointing the wrong way. Multipath ghosts, a beating adjacent carrier, and static creeping in under everything.', {
+    'composite.demodulation': 'box',
+    'composite.ringing': 0.6,
+    'tape.enabled': false,
+    'vnoise.compositeNoise': 0.09,
+    'vnoise.chromaPhaseNoise': 0.05,
+    'headswitch.enabled': false,
     'colour.temperature': 0.3,
     'colour.saturation': 0.9,
     'colour.chromaCrush': 0.3,
@@ -205,6 +235,17 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('failing', 'Failing Set', 'Dry joints, a tired line-output stage and a vertical hold that will not. Turn the flyback whine up and leave the room.', {
+    'composite.demodulation': 'box',
+    'composite.chromaPhaseError': 0.12,
+    'tape.speed': 'lp',
+    'tape.chromaLoss': 0.3,
+    'tape.edgeWave': 6,
+    'vnoise.chromaNoise': 0.25,
+    'vnoise.chromaPhaseNoise': 0.15,
+    'headswitch.height': 18,
+    'headswitch.shift': 95,
+    'headswitch.tracking': 0.45,
+    'headswitch.trackingSnow': 0.7,
     'colour.temperature': 0.45,
     'colour.tintGM': 0.3,
     'colour.greenGain': 1.08,
@@ -265,6 +306,11 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('portable', 'Kitchen Portable', 'A 5-inch set on top of a fridge. Tiny tube, tiny speaker, mains hum through everything, and a picture you have to stand in front of.', {
+    'composite.demodulation': 'box',
+    'composite.chromaLowpassOut': 0.45,
+    'tape.enabled': false,
+    'vnoise.compositeNoise': 0.05,
+    'headswitch.enabled': false,
     'colour.temperature': 0.5,
     'colour.saturation': 0.88,
     'colour.chromaCrush': 0.25,
@@ -303,6 +349,11 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('cctv', 'Security Monitor', 'A 9-inch monochrome-ish monitor that has watched the same corridor for eleven years. Long persistence, heavy burn-in, no colour worth speaking of.', {
+    'composite.demodulation': 'notch',
+    'tape.enabled': false,
+    'vnoise.compositeNoise': 0.04,
+    'vnoise.chromaNoise': 0.02,
+    'headswitch.enabled': false,
     'colour.temperature': 0.15,
     'colour.saturation': 0.18,
     'colour.colourKiller': 0.7,
@@ -337,6 +388,10 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('arcade', 'Arcade Monitor', 'A well-driven 15 kHz arcade tube: aperture grille, hard 240p lines, and enough beam current to bloom. Signal path stays clean.', {
+    'composite.enabled': false,
+    'tape.enabled': false,
+    'vnoise.enabled': false,
+    'headswitch.enabled': false,
     'colour.temperature': -0.1,
     'colour.saturation': 1.12,
     'colour.vibrance': 0.15,
@@ -375,6 +430,15 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('transmission', 'Late Transmission', 'Something is being broadcast that should not be. Rolling hum bar locked to the hum, static bleeding into both, and a transport that keeps losing its grip.', {
+    'composite.demodulation': 'box',
+    'composite.chromaPhaseError': 0.1,
+    'tape.speed': 'lp',
+    'tape.chromaLoss': 0.2,
+    'tape.edgeWave': 4,
+    'vnoise.compositeNoise': 0.07,
+    'vnoise.chromaNoise': 0.18,
+    'headswitch.tracking': 0.4,
+    'headswitch.shift': 85,
     'colour.temperature': 0.3,
     'colour.tintGM': 0.18,
     'colour.saturation': 0.85,
@@ -453,6 +517,14 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('lostsignal', 'Lost Signal', 'No lock. Full snow, full roar, and the hum still there underneath because the set is still on.', {
+    'composite.demodulation': 'box',
+    'tape.speed': 'ep',
+    'tape.chromaLoss': 0.8,
+    'vnoise.compositeNoise': 0.35,
+    'vnoise.snow': 0.5,
+    'vnoise.chromaNoise': 0.4,
+    'headswitch.tracking': 0.8,
+    'headswitch.trackingSnow': 1,
     'colour.saturation': 0.5,
     'colour.colourKiller': 0.6,
     'glitch.enabled': true,

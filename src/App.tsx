@@ -37,7 +37,7 @@ import { desktop, isBatchMode, saveBlob } from './platform/desktop';
 import { outputSize, tubeAspect, upscaleFactor } from './core/output';
 import { Guide, shouldShowOnStartup } from './ui/Guide';
 
-type Tab = 'video' | 'audio' | 'link';
+type Tab = 'tape' | 'video' | 'audio' | 'link';
 
 interface Media {
   url: string;
@@ -58,7 +58,7 @@ interface ExportResult {
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
-  const [tab, setTab] = useState<Tab>('video');
+  const [tab, setTab] = useState<Tab>('tape');
   const [advanced, setAdvanced] = useState(false);
   // Batch renders have no user and must never block on a dialog.
   const [guideOpen, setGuideOpen] = useState(() => !isBatchMode && shouldShowOnStartup());
@@ -539,11 +539,12 @@ export default function App() {
       randomize(prev, {
         seed: nextSeed,
         amount: randomAmount,
-        groups: tab === 'video'
-          ? GROUPS.filter((g) => g.kind === 'video').map((g) => g.id)
-          : tab === 'audio'
-            ? GROUPS.filter((g) => g.kind === 'audio').map((g) => g.id)
-            : undefined,
+        // Randomising rolls the tab you are looking at, so a wander through
+        // the tape engine never quietly rearranges the tube.
+        groups:
+          tab === 'link'
+            ? undefined
+            : GROUPS.filter((g) => g.kind === tab).map((g) => g.id),
       }),
     );
     setPresetName('');
@@ -1067,9 +1068,7 @@ export default function App() {
 
   /* ---------------- render ---------------- */
 
-  const groups = GROUPS.filter((g) =>
-    tab === 'video' ? g.kind === 'video' : tab === 'audio' ? g.kind === 'audio' : g.kind === 'link',
-  );
+  const groups = GROUPS.filter((g) => g.kind === tab);
 
   const modifiedCount = useMemo(
     () => Object.keys(DEFAULTS).filter((k) => settings[k] !== DEFAULTS[k]).length,
@@ -1163,9 +1162,21 @@ export default function App() {
       <div className="body">
         <aside className="sidebar">
           <nav className="tabs">
-            {(['video', 'audio', 'link'] as Tab[]).map((t) => (
-              <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
-                {t === 'video' ? 'Picture' : t === 'audio' ? 'Sound' : 'A/V Link'}
+            {(
+              [
+                ['tape', 'Tape', 'The signal: composite encode and decode, and the videotape it was recorded on'],
+                ['video', 'Tube', 'The display: the glass, the beam, the phosphor and the set around it'],
+                ['audio', 'Sound', 'The speaker, the noise bed and the tape transport'],
+                ['link', 'A/V Link', 'What ties the picture and the sound together'],
+              ] as [Tab, string, string][]
+            ).map(([t, label, title]) => (
+              <button
+                key={t}
+                className={tab === t ? 'active' : ''}
+                onClick={() => setTab(t)}
+                title={title}
+              >
+                {label}
               </button>
             ))}
           </nav>

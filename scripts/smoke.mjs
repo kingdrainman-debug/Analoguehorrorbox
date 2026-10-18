@@ -369,6 +369,18 @@ const keys = await page.evaluate(async () => {
     window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
     await sleep(900);
 
+    // The sidebar now has two engines; these assertions are about the tube, so
+    // select that tab rather than relying on which one opens by default.
+    const selectTab = async (name) => {
+      document.querySelector('.guide-close')?.click();
+      await sleep(250);
+      [...document.querySelectorAll('.tabs button')]
+        .find((b) => b.textContent.trim() === name)
+        ?.click();
+      await sleep(350);
+    };
+    await selectTab('Tube');
+
     const row = [...document.querySelectorAll('.param')].find(
       (r) => r.querySelector('.param-label')?.textContent === 'Signal loss',
     );
@@ -459,6 +471,17 @@ const framing = await page2.evaluate(async () => {
   const out = { ratios: {}, error: null };
   try {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // The sidebar now has two engines; these assertions are about the tube, so
+    // select that tab rather than relying on which one opens by default.
+    const selectTab = async (name) => {
+      document.querySelector('.guide-close')?.click();
+      await sleep(250);
+      [...document.querySelectorAll('.tabs button')]
+        .find((b) => b.textContent.trim() === name)
+        ?.click();
+      await sleep(350);
+    };
+    await selectTab('Tube');
     const openGroup = (title) => {
       const toggle = [...document.querySelectorAll('.group')].find(
         (s) => s.querySelector('.group-title')?.textContent === title,
@@ -557,6 +580,18 @@ const trails = await page2.evaluate(async () => {
       g.fillRect(0, 0, 320, 240);
     }, 'white.png');
     await sleep(1000);
+
+    // The sidebar now has two engines; these assertions are about the tube, so
+    // select that tab rather than relying on which one opens by default.
+    const selectTab = async (name) => {
+      document.querySelector('.guide-close')?.click();
+      await sleep(250);
+      [...document.querySelectorAll('.tabs button')]
+        .find((b) => b.textContent.trim() === name)
+        ?.click();
+      await sleep(350);
+    };
+    await selectTab('Tube');
 
     // Long persistence; everything else that could light the screen on its own
     // goes to zero so the measurement is unambiguous.
@@ -771,6 +806,14 @@ const sections = await (async () => {
         if (!slider) throw new Error(`no slider for ${label}`);
         setInput(slider, v);
       };
+      const selectTab = async (name) => {
+        document.querySelector('.guide-close')?.click();
+        await sleep(250);
+        [...document.querySelectorAll('.tabs button')]
+          .find((b) => b.textContent.trim() === name)
+          ?.click();
+        await sleep(350);
+      };
 
       const src = document.createElement('canvas');
       src.width = 320;
@@ -813,7 +856,12 @@ const sections = await (async () => {
         return { sat: n ? sat / n : 0, rb: rb / (d.length / 4) };
       };
 
+      await selectTab('Tube');
       open('Colour');
+      // The poll below can exit without ever sleeping when the picture is
+      // already drawn, so the group has to be given a chance to render first or
+      // every lookup after this runs against the previous DOM.
+      await sleep(400);
 
       // Poll for the picture rather than assuming a fixed decode time; a fixed
       // wait here turns a passing test into an occasionally-failing one.
@@ -976,6 +1024,10 @@ const guide = await (async () => {
         [...document.querySelectorAll('.group')].find(
           (g) => g.querySelector('.group-title')?.textContent === t,
         );
+      [...document.querySelectorAll('.tabs button')]
+        .find((b) => b.textContent.trim() === 'Tube')
+        ?.click();
+      await sleep(400);
       const beam = sect('Beam & Scanlines');
       if (!beam) throw new Error('no Beam & Scanlines section');
       beam.querySelector('.group-info-btn').click();
@@ -1028,6 +1080,229 @@ if (guide.error) {
   }
 }
 
+/* -------- 11. the tape engine -------- */
+
+/*
+ * The second emulator: composite encode and decode, and the videotape. Almost
+ * nothing in it is drawn on, so the assertions here are about emergent
+ * behaviour rather than about pixels being different.
+ *
+ *   - Cross-colour: a pure greyscale stripe pattern must come back coloured,
+ *     because fine luma detail lands in the chroma band. Box demodulation must
+ *     leave substantially more of it than a 2-line comb, which is the entire
+ *     reason those filters existed.
+ *   - Dot crawl must actually crawl: with a 180 degree scanline phase shift the
+ *     pattern inverts frame to frame, and at 0 degrees it stands still.
+ *
+ * The crawl measurement is taken 1:1 on a crop. The subcarrier runs at 227.5
+ * cycles across a line, so downsampling the frame aliases the pattern away and
+ * a whole-frame comparison shows nothing whether it works or not.
+ */
+
+const tapeEngine = await (async () => {
+  const p = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  const out = { rainbowBox: 0, rainbowComb: 0, combVsBox: 0, crawlMoves: 0, staticPhase: 0, spVsEp: 0, tabs: [], error: null };
+  try {
+    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+    await p.waitForTimeout(1500);
+    const r = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
+      const setInput = (el, v) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      document.querySelector('.guide-close')?.click();
+      await sleep(400);
+      const tabs = [...document.querySelectorAll('.tabs button')].map((b) => b.textContent.trim());
+
+      // Colour bars over fine single-pixel greyscale stripes: the pattern that
+      // provokes cross-colour hardest.
+      const c = document.createElement('canvas');
+      c.width = 384;
+      c.height = 288;
+      const g = c.getContext('2d');
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, 384, 288);
+      ['#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff00ff', '#ff0000', '#0000ff'].forEach((col, i) => {
+        g.fillStyle = col;
+        g.fillRect((i * 384) / 7, 0, 384 / 7 + 1, 180);
+      });
+      g.fillStyle = '#fff';
+      for (let x = 0; x < 384; x += 3) g.fillRect(x, 190, 1, 98);
+      const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'bars.png', { type: 'image/png' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      await sleep(1800);
+
+      const app = document.querySelector('.stage canvas');
+      const probe = document.createElement('canvas');
+      probe.width = 240;
+      probe.height = 180;
+      const pg = probe.getContext('2d', { willReadFrequently: true });
+      const grab = () => {
+        pg.drawImage(app, 0, 0, probe.width, probe.height);
+        return pg.getImageData(0, 0, probe.width, probe.height).data;
+      };
+      const stripeSat = () => {
+        const d = grab();
+        let sat = 0;
+        let n = 0;
+        for (let y = Math.floor(probe.height * 0.68); y < Math.floor(probe.height * 0.95); y++) {
+          for (let x = 20; x < probe.width - 20; x++) {
+            const i = (y * probe.width + x) * 4;
+            const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+            const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+            if (mx > 26) {
+              sat += (mx - mn) / mx;
+              n++;
+            }
+          }
+        }
+        return n ? sat / n : 0;
+      };
+      const diff = (a, b) => {
+        let s = 0;
+        for (let i = 0; i < a.length; i += 4) {
+          s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+        }
+        return s / (a.length / 4);
+      };
+
+      const sect = (t) =>
+        [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
+      const enable = (t, v) => {
+        const cb = sect(t)?.querySelector(".group-actions input[type='checkbox']");
+        if (cb && cb.checked !== v) cb.click();
+      };
+      const open = (t) => {
+        const x = sect(t);
+        if (x && !x.classList.contains('open')) x.querySelector('.group-toggle').click();
+      };
+      const tab = (name) =>
+        [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === name)?.click();
+      const setP = (l, v) => {
+        const row = [...document.querySelectorAll('.param')].find(
+          (r) => r.querySelector('.param-label')?.textContent === l,
+        );
+        const sl = row?.querySelector("input[type='range']");
+        if (sl) setInput(sl, v);
+      };
+      const setSel = (l, v) => {
+        const row = [...document.querySelectorAll('.param')].find(
+          (r) => r.querySelector('.param-label')?.textContent === l,
+        );
+        const se = row?.querySelector('select');
+        if (!se) throw new Error(`no control for ${l}`);
+        se.value = v;
+        se.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      // Silence the tube so what is measured is the tape engine alone.
+      tab('Tube');
+      await sleep(300);
+      for (const t of [
+        'Signal & Reception', 'Sync & Timebase', 'Faults & Wear', 'Phosphor & Mask',
+        'Halation & Bloom', 'Convergence & Focus', 'Beam & Scanlines', 'Tube Geometry',
+      ]) {
+        enable(t, false);
+      }
+      await sleep(500);
+
+      tab('Tape');
+      await sleep(350);
+      open('Composite Signal');
+      open('Signal Noise');
+      open('VHS Tape');
+      await sleep(350);
+      for (const l of ['Composite noise', 'Luma noise', 'Chroma noise', 'Chroma phase noise']) setP(l, 0);
+      await sleep(600);
+
+      const res = {};
+      setSel('Chroma demodulation', 'box');
+      await sleep(800);
+      res.rainbowBox = stripeSat();
+      const boxFrame = grab();
+      setSel('Chroma demodulation', 'twoline');
+      await sleep(800);
+      res.rainbowComb = stripeSat();
+      res.combVsBox = diff(boxFrame, grab());
+
+      const crop = document.createElement('canvas');
+      crop.width = 200;
+      crop.height = 60;
+      const cg = crop.getContext('2d', { willReadFrequently: true });
+      const grabCrop = () => {
+        cg.drawImage(app, Math.floor(app.width * 0.3), Math.floor(app.height * 0.25), 200, 60, 0, 0, 200, 60);
+        return cg.getImageData(0, 0, 200, 60).data;
+      };
+      setSel('Chroma demodulation', 'box');
+      setSel('Scanline phase shift', '180');
+      await sleep(900);
+      const f1 = grabCrop();
+      await sleep(300);
+      const f2 = grabCrop();
+      await sleep(300);
+      const f3 = grabCrop();
+      res.crawlMoves = Math.max(diff(f1, f2), diff(f2, f3), diff(f1, f3));
+
+      setSel('Scanline phase shift', '0');
+      await sleep(900);
+      const s1 = grabCrop();
+      await sleep(300);
+      const s2 = grabCrop();
+      await sleep(300);
+      const s3 = grabCrop();
+      res.staticPhase = Math.max(diff(s1, s2), diff(s2, s3), diff(s1, s3));
+
+      setSel('Tape speed', 'sp');
+      await sleep(800);
+      const sp = grab();
+      setSel('Tape speed', 'ep');
+      await sleep(800);
+      res.spVsEp = diff(sp, grab());
+
+      return { ...res, tabs };
+    });
+    Object.assign(out, r);
+  } catch (err) {
+    out.error = String(err);
+  }
+  await p.close();
+  return out;
+})();
+
+if (tapeEngine.error) {
+  failures.push(`tape: ${tapeEngine.error}`);
+} else {
+  const want = ['Tape', 'Tube', 'Sound', 'A/V Link'];
+  if (tapeEngine.tabs.join(',') !== want.join(',')) {
+    failures.push(`tape: tabs are ${tapeEngine.tabs.join(', ')}, expected ${want.join(', ')}`);
+  }
+  if (tapeEngine.rainbowBox < 0.12) {
+    failures.push(
+      `tape: greyscale stripes came back only ${tapeEngine.rainbowBox.toFixed(3)} saturated — cross-colour is not emerging from the encode/decode`,
+    );
+  }
+  if (tapeEngine.rainbowBox < tapeEngine.rainbowComb * 1.5) {
+    failures.push(
+      `tape: box demodulation (${tapeEngine.rainbowBox.toFixed(3)}) should leave far more cross-colour than a 2-line comb (${tapeEngine.rainbowComb.toFixed(3)})`,
+    );
+  }
+  if (tapeEngine.combVsBox < 10) {
+    failures.push(`tape: the demodulation filter barely changed the picture (${tapeEngine.combVsBox.toFixed(1)}/px)`);
+  }
+  if (tapeEngine.crawlMoves < tapeEngine.staticPhase * 2.5) {
+    failures.push(
+      `tape: dot crawl is not crawling — ${tapeEngine.crawlMoves.toFixed(1)} of frame-to-frame change at 180° vs ${tapeEngine.staticPhase.toFixed(1)} at 0°`,
+    );
+  }
+  if (tapeEngine.spVsEp < 1.5) {
+    failures.push(`tape: SP and EP render almost identically (${tapeEngine.spVsEp.toFixed(1)}/px)`);
+  }
+}
+
 await browser.close();
 server.close();
 
@@ -1066,4 +1341,7 @@ console.log(
 console.log(`  glitch    ${sections.glitchOnVsOff.toFixed(1)} per-pixel change when switched on`);
 console.log(
   `  guide     shown on start, closes, reopens, ${guide.tubes} tubes · ⓘ reveals ${guide.paramInfo.length} chars (param) / ${guide.sectionInfo.length} (section)`,
+);
+console.log(
+  `  tape      cross-colour ${tapeEngine.rainbowBox.toFixed(3)} box vs ${tapeEngine.rainbowComb.toFixed(3)} comb · dot crawl ${tapeEngine.crawlMoves.toFixed(1)} moving vs ${tapeEngine.staticPhase.toFixed(1)} static · SP→EP ${tapeEngine.spVsEp.toFixed(1)}/px`,
 );

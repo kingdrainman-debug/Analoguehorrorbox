@@ -12,6 +12,7 @@ import { beamNormalisation, maskNormalisation } from './normalization';
 
 import quadVert from './shaders/quad.vert.glsl?raw';
 import common from './shaders/common.glsl?raw';
+import ntscFrag from './shaders/ntsc.frag.glsl?raw';
 import signalFrag from './shaders/signal.frag.glsl?raw';
 import persistFrag from './shaders/persist.frag.glsl?raw';
 import burninFrag from './shaders/burnin.frag.glsl?raw';
@@ -49,6 +50,7 @@ export interface RenderTelemetry {
 }
 
 type Programs = {
+  ntsc: WebGLProgram;
   signal: WebGLProgram;
   persist: WebGLProgram;
   burnin: WebGLProgram;
@@ -67,6 +69,7 @@ export class CrtRenderer {
   private srcWidth = 2;
   private srcHeight = 2;
 
+  private ntscT: Target | null = null;
   private signalT: Target | null = null;
   private screen: PingPong | null = null;
   private burn: PingPong | null = null;
@@ -111,6 +114,7 @@ export class CrtRenderer {
     this.vao = createFullscreenTriangle(gl);
     this.programs = {
       signal: createProgram(gl, quadVert, frag(signalFrag), 'signal'),
+      ntsc: createProgram(gl, quadVert, frag(ntscFrag), 'ntsc'),
       persist: createProgram(gl, quadVert, frag(persistFrag), 'persist'),
       burnin: createProgram(gl, quadVert, frag(burninFrag), 'burnin'),
       bright: createProgram(gl, quadVert, frag(brightFrag), 'bright'),
@@ -183,6 +187,7 @@ export class CrtRenderer {
     const ew = Math.max(2, width >> 3);
     const eh = Math.max(2, height >> 3);
 
+    this.ntscT = createTarget(gl, width, height, half);
     this.signalT = createTarget(gl, width, height, half);
     this.screen = new PingPong(gl, width, height, half);
     this.burn = new PingPong(gl, Math.max(2, width >> 2), Math.max(2, height >> 2), half);
@@ -199,6 +204,7 @@ export class CrtRenderer {
 
   private releaseTargets(): void {
     const gl = this.gl;
+    deleteTarget(gl, this.ntscT);
     deleteTarget(gl, this.signalT);
     deleteTarget(gl, this.brightT);
     deleteTarget(gl, this.blurT);
@@ -207,7 +213,7 @@ export class CrtRenderer {
     deleteTarget(gl, this.halT2);
     this.screen?.dispose(gl);
     this.burn?.dispose(gl);
-    this.signalT = this.brightT = this.blurT = this.bloomT = this.halT1 = this.halT2 = null;
+    this.ntscT = this.signalT = this.brightT = this.blurT = this.bloomT = this.halT1 = this.halT2 = null;
     this.screen = this.burn = null;
     this.internalW = this.internalH = 0;
   }
@@ -304,19 +310,93 @@ export class CrtRenderer {
     const telemetry = this.advanceState(f);
 
     this.ensureTargets(this.srcWidth, this.srcHeight);
-    if (!this.signalT || !this.screen || !this.burn || !this.brightT || !this.blurT ||
+    if (!this.ntscT || !this.signalT || !this.screen || !this.burn || !this.brightT || !this.blurT ||
         !this.bloomT || !this.halT1 || !this.halT2) {
       return telemetry;
     }
 
     const dt = Math.max(1e-4, Math.min(f.dt, 0.25));
 
+    /* -------- pass 0: the tape engine -------- *
+     * Composite encode/decode and videotape, upstream of everything the tube
+     * does. Runs first because that is the order it happened in: the signal was
+     * damaged on the way to the set, and only then displayed badly. */
+    {
+      const p = this.programs.ntsc;
+      const u = this.u(p);
+      gl.useProgram(p);
+      u.tex('u_src', 0, this.sourceTexture);
+      u.v2('u_srcSize', this.srcWidth, this.srcHeight);
+      u.f('u_time', f.time);
+      u.f('u_frame', f.frame);
+      u.f('u_seed', f.seed);
+
+      const compositeOn = bool(s, 'composite.enabled');
+      u.f('u_compositeOn', compositeOn ? 1 : 0);
+      u.f('u_bandwidthScale', num(s, 'composite.bandwidthScale'));
+      u.f('u_demod', code(s, 'composite.demodulation'));
+      u.f('u_phaseShift', code(s, 'composite.phaseShift'));
+      u.f('u_phaseShiftOffset', num(s, 'composite.phaseShiftOffset'));
+      u.f('u_preemphasis', num(s, 'composite.preemphasis'));
+      u.f('u_ringing', num(s, 'composite.ringing'));
+      u.f('u_ringingFreq', num(s, 'composite.ringingFrequency'));
+      u.f('u_ringingPower', num(s, 'composite.ringingPower'));
+      u.f('u_chromaLowpassIn', num(s, 'composite.chromaLowpassIn'));
+      u.f('u_chromaLowpassOut', num(s, 'composite.chromaLowpassOut'));
+      u.f('u_chromaDelayH', num(s, 'composite.chromaDelayH'));
+      u.f('u_chromaDelayV', num(s, 'composite.chromaDelayV'));
+      u.f('u_chromaPhaseError', num(s, 'composite.chromaPhaseError'));
+      u.f('u_lumaSmear', num(s, 'composite.lumaSmear'));
+
+      const tapeOn = bool(s, 'tape.enabled');
+      u.f('u_tapeOn', tapeOn ? 1 : 0);
+      u.f('u_tapeSpeed', code(s, 'tape.speed'));
+      u.f('u_chromaLoss', num(s, 'tape.chromaLoss'));
+      u.f('u_chromaVertBlend', bool(s, 'tape.chromaVertBlend') ? 1 : 0);
+      u.f('u_sharpen', num(s, 'tape.sharpen'));
+      u.f('u_sharpenFreq', num(s, 'tape.sharpenFrequency'));
+      u.f('u_edgeWave', num(s, 'tape.edgeWave'));
+      u.f('u_edgeWaveSpeed', num(s, 'tape.edgeWaveSpeed'));
+      u.f('u_edgeWaveFreq', num(s, 'tape.edgeWaveFrequency'));
+      u.f('u_edgeWaveDetail', num(s, 'tape.edgeWaveDetail'));
+
+      const vnoiseOn = bool(s, 'vnoise.enabled');
+      u.f('u_noiseOn', vnoiseOn ? 1 : 0);
+      u.f('u_compositeNoise', num(s, 'vnoise.compositeNoise'));
+      u.f('u_compositeNoiseFreq', num(s, 'vnoise.compositeNoiseFrequency'));
+      u.f('u_compositeNoiseDetail', num(s, 'vnoise.compositeNoiseDetail'));
+      u.f('u_lumaNoise', num(s, 'vnoise.lumaNoise'));
+      u.f('u_lumaNoiseFreq', num(s, 'vnoise.lumaNoiseFrequency'));
+      u.f('u_lumaNoiseDetail', num(s, 'vnoise.lumaNoiseDetail'));
+      u.f('u_chromaNoise', num(s, 'vnoise.chromaNoise'));
+      u.f('u_chromaNoiseFreq', num(s, 'vnoise.chromaNoiseFrequency'));
+      u.f('u_chromaNoiseDetail', num(s, 'vnoise.chromaNoiseDetail'));
+      u.f('u_chromaPhaseNoise', num(s, 'vnoise.chromaPhaseNoise'));
+      u.f('u_snow', num(s, 'vnoise.snow'));
+      u.f('u_snowAnisotropy', num(s, 'vnoise.snowAnisotropy'));
+
+      const headOn = bool(s, 'headswitch.enabled');
+      u.f('u_headOn', headOn ? 1 : 0);
+      u.f('u_headHeight', num(s, 'headswitch.height'));
+      u.f('u_headOffset', num(s, 'headswitch.offset'));
+      u.f('u_headShift', num(s, 'headswitch.shift'));
+      u.f('u_headMidLine', bool(s, 'headswitch.midLine') ? 1 : 0);
+      u.f('u_headMidLinePos', num(s, 'headswitch.midLinePosition'));
+      u.f('u_headMidLineJitter', num(s, 'headswitch.midLineJitter'));
+      u.f('u_tracking', num(s, 'headswitch.tracking'));
+      u.f('u_trackingHeight', num(s, 'headswitch.trackingHeight'));
+      u.f('u_trackingWave', num(s, 'headswitch.trackingWave'));
+      u.f('u_trackingSnow', num(s, 'headswitch.trackingSnow'));
+
+      this.draw(p, this.ntscT);
+    }
+
     /* -------- pass 1: signal -------- */
     {
       const p = this.programs.signal;
       const u = this.u(p);
       gl.useProgram(p);
-      u.tex('u_src', 0, this.sourceTexture);
+      u.tex('u_src', 0, this.ntscT.texture);
       u.v2('u_srcSize', this.srcWidth, this.srcHeight);
       u.f('u_time', f.time);
       u.f('u_frame', f.frame);

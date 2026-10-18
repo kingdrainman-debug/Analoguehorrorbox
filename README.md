@@ -60,6 +60,28 @@ the reason the app exists.
 | **Crackle & Contact Faults** | Poisson events with power-law amplitudes, randomised tone per click, and a burst process for arcing joints |
 | **A/V Link** | Hum bar ↔ hum, signal loss ↔ static, audio → brightness and bloom, picture glitch → dropout, degauss → thump, power state → audio |
 
+### Two engines, one signal path
+
+CRTBOX models two different things, and runs both on every frame in the order
+they happened in reality.
+
+| Tab | Models | Highlights |
+|---|---|---|
+| **Tape** | The signal, and the videotape it was recorded on | Composite encode/decode at a 227.5 cycle subcarrier, box / notch / 1-line / 2-line comb demodulation, scanline phase shift, SP/LP/EP tape bandwidths, chroma loss, output sharpen, edge wave, head switching and tracking noise |
+| **Tube** | The display, and the room it is in | Beam reconstruction with blooming, aperture grille / slot / shadow masks, P22 persistence and gamut, halation, convergence, CRT gamma, hum bar, burn-in, glitching |
+
+They are not alternatives and there is no switch between them — a signal was
+damaged on its way to the television, and then the television displayed it
+badly. Each section has its own enable switch, so either half runs alone.
+
+**Almost nothing in the Tape tab is drawn on.** Chroma really is modulated onto
+a subcarrier, band-limited, and separated out again. Dot crawl, rainbow
+cross-colour and comb fringing are what fall out of doing that honestly, which
+is why changing the demodulation filter changes so much: on a greyscale stripe
+pattern, box demodulation leaves about 2.6× the false colour a 2-line comb
+does, and at a 180° scanline phase shift the dot pattern inverts every frame
+instead of standing still. Both are asserted by the smoke test.
+
 ### Finding your way around
 
 The app opens on a **guide** covering how to get footage in, what each reference

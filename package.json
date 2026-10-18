@@ -1,8 +1,8 @@
 {
   "name": "crtbox",
   "productName": "CRTBOX",
-  "version": "0.1.1",
-  "description": "A real-time CRT television emulator for video and audio. Standalone app + web app.",
+  "version": "2.0.0",
+  "description": "Analogue Horror Box — a composite/VHS signal emulator and a CRT television emulator in one application, for picture and sound.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -21,6 +21,7 @@
     "shots": "node scripts/shots.mjs",
     "test": "npm run typecheck && npm run build && npm run help:check && npm run smoke",
     "help:check": "node scripts/check-help.mjs",
+    "bench": "npm run build && node scripts/bench.mjs",
     "icon": "node scripts/make-icon.mjs",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:mac": "npm run build && electron-builder --mac",

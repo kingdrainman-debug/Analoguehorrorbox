@@ -41,7 +41,7 @@ interface Props {
   onOpenMedia(): void;
 }
 
-type Section = 'start' | 'tubes' | 'workflow';
+type Section = 'start' | 'engines' | 'tubes' | 'workflow';
 
 export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
   const [section, setSection] = useState<Section>('start');
@@ -93,6 +93,7 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
           {(
             [
               ['start', 'Getting footage in'],
+              ['engines', 'The two engines'],
               ['tubes', 'Reference tubes'],
               ['workflow', 'Building a look'],
             ] as [Section, string][]
@@ -109,6 +110,7 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
 
         <div className="guide-body">
           {section === 'start' && <GettingStarted onOpenMedia={onOpenMedia} onClose={onClose} />}
+          {section === 'engines' && <Engines />}
           {section === 'tubes' && (
             <Tubes
               onPick={(id) => {
@@ -207,6 +209,67 @@ function GettingStarted({
   );
 }
 
+function Engines() {
+  return (
+    <>
+      <h2>One signal path, two emulators</h2>
+      <p>
+        CRTBOX models two different things, and they are different things. The{' '}
+        <em>Tape</em> tab is the signal: a picture encoded onto a composite carrier,
+        recorded to videotape, read back and decoded again. The <em>Tube</em> tab is the
+        display: the glass, the electron beam, the phosphor and the room the set is
+        sitting in.
+      </p>
+      <p>
+        They are not alternatives and there is no switch between them. Both run, in that
+        order, on every frame — which is the order it happened in reality. A signal was
+        damaged on its way to the television, and then the television displayed it badly.
+        Each tab has enable switches per section, so you can run either half on its own.
+      </p>
+
+      <h2>Why the tape engine matters</h2>
+      <p>
+        Almost nothing in the Tape tab is drawn on. Chroma really is modulated onto a
+        subcarrier at 227.5 cycles per line, band-limited, and separated out again at the
+        other end. Dot crawl, rainbow cross-colour and comb fringing are not effects in
+        this app — they are what you get when that round trip is performed honestly.
+      </p>
+      <p>
+        That is why <em>Chroma demodulation</em> changes so much. Box is a cheap set and
+        leaves the maximum dot crawl and rainbow. A 2-line comb is a good late-model set
+        and cancels nearly all of it, at the cost of colour fringing wherever the picture
+        moves vertically. Both failures are real, and neither is faked.
+      </p>
+
+      <h2>Where to start in each</h2>
+      <ol className="guide-steps">
+        <li>
+          <strong>Tape ▸ VHS Tape ▸ Tape speed.</strong> Not a style control — it sets the
+          luma and chroma bandwidth the way the real recording mode did. SP is careful, EP
+          is six hours on one cassette with barely any colour left.
+        </li>
+        <li>
+          <strong>Tape ▸ Composite ▸ Chroma demodulation.</strong> The biggest single
+          decision in the signal half.
+        </li>
+        <li>
+          <strong>Tube ▸ Phosphor &amp; Mask ▸ Mask type.</strong> Aperture grille for a
+          Trinitron or an arcade monitor, slot for a normal television, shadow for
+          something older and softer.
+        </li>
+        <li>
+          <strong>Tube ▸ Beam ▸ Beam blooming.</strong> What separates a real tube from a
+          scanline overlay.
+        </li>
+      </ol>
+      <p className="guide-note">
+        Every control in both tabs has an <strong>ⓘ</strong> beside it, and so does every
+        section. If something is not doing what you expect, that is the first place to look.
+      </p>
+    </>
+  );
+}
+
 function Tubes({ onPick }: { onPick(id: string): void }) {
   return (
     <>
@@ -226,9 +289,12 @@ function Tubes({ onPick }: { onPick(id: string): void }) {
         ))}
       </div>
       <p className="guide-note">
-        Clicking one loads it and closes this window. They are also in the dropdown at the top of
-        the app, and <em>Randomise</em> beside it will wander away from wherever you are by an
-        adjustable amount — a good way to find something you would not have dialled in deliberately.
+        Each one sets both engines together, so &ldquo;Third-Generation Tape&rdquo; gives you an
+        EP recording <em>and</em> the tired set it is being played back on, while
+        &ldquo;Arcade Monitor&rdquo; switches the tape half off entirely because an arcade
+        cabinet was fed RGB directly. Clicking one loads it and closes this window. They are also
+        in the dropdown at the top of the app, and <em>Randomise</em> rolls whichever tab you are
+        looking at.
       </p>
     </>
   );
@@ -239,7 +305,10 @@ function Workflow() {
     <>
       <h2>The short version</h2>
       <ol className="guide-steps">
-        <li>Load footage, pick a reference tube.</li>
+        <li>
+          Load footage, pick a reference tube. That sets both the Tape and the Tube halves at
+          once.
+        </li>
         <li>
           Adjust in the sidebar. Every control has an <strong>ⓘ</strong> next to it that explains
           what it physically is, what each end of its range looks like and when to reach for it.

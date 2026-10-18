@@ -71,7 +71,7 @@ export interface Group {
   id: string;
   label: string;
   /** Which pane the group lives in. */
-  kind: 'video' | 'audio' | 'link';
+  kind: 'tape' | 'video' | 'audio' | 'link';
   hint?: string;
   /** Key of the bool param that arms/disarms the whole group. */
   enableKey?: string;
@@ -110,6 +110,35 @@ const ASPECTS: EnumOption[] = [
   { value: '4:3', label: '4:3', code: 0 },
   { value: '16:9', label: '16:9', code: 1 },
   { value: 'source', label: 'Match source', code: 2 },
+];
+
+/* ------------------------------------------------------------------ *
+ * Tape engine vocabularies
+ *
+ * Names and values follow ntsc-rs's own setting ids wherever there is a
+ * counterpart, so anyone who knows that tool can find the same control here
+ * and a value means the same thing in both.
+ * ------------------------------------------------------------------ */
+
+const TAPE_SPEEDS: EnumOption[] = [
+  { value: 'sp', label: 'SP — standard play', code: 0, hint: 'Two hours on an E180. The best a domestic VHS deck managed: roughly 3 MHz of luma.' },
+  { value: 'lp', label: 'LP — long play', code: 1, hint: 'Half the tape speed, noticeably softer, and the chroma starts to go.' },
+  { value: 'ep', label: 'EP/SLP — extended play', code: 2, hint: 'Six hours on one cassette. Barely 2 MHz of luma, chroma almost gone. The look of a tape recorded by someone who cared more about fitting it all on.' },
+  { value: 'none', label: 'No tape (broadcast)', code: 3, hint: 'Skip the tape stage entirely and keep only the composite signal model.' },
+];
+
+const DEMOD_FILTERS: EnumOption[] = [
+  { value: 'box', label: 'Box', code: 0, hint: 'A flat moving average. Cheapest and worst: maximum dot crawl and rainbows, which is exactly what a cheap set did.' },
+  { value: 'notch', label: 'Notch', code: 1, hint: 'Notches out the subcarrier. Cleaner luma, but it takes real detail with it.' },
+  { value: 'oneline', label: '1-line comb', code: 2, hint: 'Compares against the line above. Cancels most dot crawl at the cost of vertical colour fringing on horizontal edges.' },
+  { value: 'twoline', label: '2-line comb', code: 3, hint: 'Compares against the lines above and below. What a good late-model set used — clean, with artefacts only where the picture moves vertically.' },
+];
+
+const PHASE_SHIFTS: EnumOption[] = [
+  { value: '0', label: '0°', code: 0 },
+  { value: '90', label: '90°', code: 1, hint: 'The classic four-field NTSC sequence. Dot crawl creeps diagonally.' },
+  { value: '180', label: '180°', code: 2, hint: 'Two-field alternation. Dot crawl creeps straight up.' },
+  { value: '270', label: '270°', code: 3 },
 ];
 
 const RECONSTRUCT: EnumOption[] = [
@@ -152,6 +181,104 @@ const POWER_STATES: EnumOption[] = [
 /* ------------------------------------------------------------------ *
  * Video groups
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * Tape engine
+ *
+ * The second of the two emulators. Where the tube engine models the glass and
+ * the set, this models everything upstream of it: the composite signal itself,
+ * encoded onto a subcarrier and decoded back off it, and the videotape it was
+ * recorded on. The artefacts here are not drawn on — dot crawl and rainbows
+ * fall out of modulating and demodulating for real, which is the whole point.
+ * ------------------------------------------------------------------ */
+
+const TAPE_GROUPS: Group[] = [
+  {
+    id: 'composite',
+    label: 'Composite Signal',
+    kind: 'tape',
+    enableKey: 'composite.enabled',
+    hint: 'Luma and chroma are encoded onto one wire at a colour subcarrier and taken off again. Every artefact in this section emerges from that round trip rather than being painted on.',
+    params: [
+      { key: 'composite.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'composite.bandwidthScale', type: 'float', label: 'Bandwidth scale', min: 0.125, max: 8, step: 0.001, def: 1, log: true, hint: 'Scales every frequency in the model at once. Raise it to keep the same look when you render at a higher resolution.' },
+      { key: 'composite.demodulation', type: 'enum', label: 'Chroma demodulation', options: DEMOD_FILTERS, def: 'box', noRandom: true, hint: 'How colour is separated back out of the composite signal. The single biggest decision in this section.' },
+      { key: 'composite.phaseShift', type: 'enum', label: 'Scanline phase shift', options: PHASE_SHIFTS, def: '180', noRandom: true, hint: 'How far the subcarrier advances from one line to the next. This is what makes dot crawl crawl.' },
+      { key: 'composite.phaseShiftOffset', type: 'int', label: 'Phase shift offset', min: 0, max: 3, def: 0, advanced: true, hint: 'Which field of the four-field sequence this frame starts on.' },
+      { key: 'composite.preemphasis', type: 'float', label: 'Preemphasis', min: -1, max: 2, step: 0.001, def: 1, hint: 'High frequencies are boosted before transmission and cut after, to beat the noise floor. Mismatch the two and you get the characteristic sharpened, ringing edge.' },
+      { key: 'composite.ringing', type: 'float', label: 'Ringing', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'Overshoot from the band-limiting filter: a bright echo trailing every hard vertical edge.' },
+      { key: 'composite.ringingFrequency', type: 'float', label: 'Ringing frequency', min: 0, max: 1, step: 0.001, def: 0.45, advanced: true },
+      { key: 'composite.ringingPower', type: 'float', label: 'Ringing power', min: 1, max: 10, step: 0.01, def: 4, advanced: true },
+      { key: 'composite.chromaLowpassIn', type: 'float', label: 'Chroma lowpass in', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'How hard colour is filtered before it is encoded. Real equipment filtered it heavily, because the chroma channel is narrow.' },
+      { key: 'composite.chromaLowpassOut', type: 'float', label: 'Chroma lowpass out', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'And again after decoding, to hide the subcarrier residue.' },
+      { key: 'composite.chromaDelayH', type: 'float', label: 'Chroma delay H', min: -8, max: 8, step: 0.01, def: 0, unit: 'px', hint: 'Colour arrives late and sits to one side of the object it belongs to.' },
+      { key: 'composite.chromaDelayV', type: 'float', label: 'Chroma delay V', min: -4, max: 4, step: 0.01, def: 0, unit: 'px', advanced: true },
+      { key: 'composite.chromaPhaseError', type: 'float', label: 'Chroma phase error', min: 0, max: 1, step: 0.001, def: 0, hint: 'A constant error in the decoder reference phase, which rotates every hue at once.' },
+      { key: 'composite.lumaSmear', type: 'float', label: 'Luma smear', min: 0, max: 1, step: 0.001, def: 0, hint: 'Brightness drags to the right out of bright areas, as the amplifier fails to settle.' },
+    ],
+  },
+  {
+    id: 'tape',
+    label: 'VHS Tape',
+    kind: 'tape',
+    enableKey: 'tape.enabled',
+    hint: 'What a domestic videotape did to the signal on the way to being stored and read back. Tape speed is the master control: everything else here is a deck that has seen some use.',
+    params: [
+      { key: 'tape.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'tape.speed', type: 'enum', label: 'Tape speed', options: TAPE_SPEEDS, def: 'lp', noRandom: true, hint: 'Sets the luma and chroma bandwidth together, exactly as the real recording mode did.' },
+      { key: 'tape.chromaLoss', type: 'float', label: 'Chroma loss', min: 0, max: 1, step: 0.001, def: 0, hint: 'Colour drops out entirely on random lines, which is what a worn tape does long before brightness goes.' },
+      { key: 'tape.chromaVertBlend', type: 'bool', label: 'Chroma vertical blend', def: true, hint: 'VHS averages colour between adjacent lines to save bandwidth. Leave it on for a real tape.' },
+      { key: 'tape.sharpen', type: 'float', label: 'Output sharpen', min: 0, max: 5, step: 0.001, def: 1.5, hint: 'The deck tried to put back the detail the tape lost, and overdid it. This halo is one of the most recognisable VHS signatures.' },
+      { key: 'tape.sharpenFrequency', type: 'float', label: 'Sharpen frequency', min: 0.5, max: 4, step: 0.001, def: 1, advanced: true },
+      { key: 'tape.edgeWave', type: 'float', label: 'Edge wave', min: 0, max: 20, step: 0.01, def: 1, unit: 'px', hint: 'The left edge of the picture ripples as the tape wanders against the head.' },
+      { key: 'tape.edgeWaveSpeed', type: 'float', label: 'Edge wave speed', min: 0, max: 10, step: 0.01, def: 4, advanced: true },
+      { key: 'tape.edgeWaveFrequency', type: 'float', label: 'Edge wave frequency', min: 0, max: 1, step: 0.001, def: 0.05, advanced: true },
+      { key: 'tape.edgeWaveDetail', type: 'int', label: 'Edge wave detail', min: 1, max: 5, def: 2, advanced: true },
+    ],
+  },
+  {
+    id: 'vnoise',
+    label: 'Signal Noise',
+    kind: 'tape',
+    enableKey: 'vnoise.enabled',
+    hint: 'Noise added in the signal domain rather than on the finished picture, so it is encoded, filtered and decoded along with everything else — which is why it lands as bands and streaks rather than as film grain.',
+    params: [
+      { key: 'vnoise.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'vnoise.compositeNoise', type: 'float', label: 'Composite noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Noise on the composite signal itself, before anything is decoded. Affects brightness and colour together, the way real noise does.' },
+      { key: 'vnoise.compositeNoiseFrequency', type: 'float', label: 'Composite noise frequency', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
+      { key: 'vnoise.compositeNoiseDetail', type: 'int', label: 'Composite noise detail', min: 1, max: 5, def: 1, advanced: true, hint: 'Octaves of noise. More detail is finer and busier.' },
+      { key: 'vnoise.lumaNoise', type: 'float', label: 'Luma noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Noise on brightness alone, after decoding.' },
+      { key: 'vnoise.lumaNoiseFrequency', type: 'float', label: 'Luma noise frequency', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
+      { key: 'vnoise.lumaNoiseDetail', type: 'int', label: 'Luma noise detail', min: 1, max: 5, def: 1, advanced: true },
+      { key: 'vnoise.chromaNoise', type: 'float', label: 'Chroma noise', min: 0, max: 1, step: 0.001, def: 0.05, hint: 'Noise on colour alone. Low-frequency chroma noise is the blotchy colour of a tired tape.' },
+      { key: 'vnoise.chromaNoiseFrequency', type: 'float', label: 'Chroma noise frequency', min: 0, max: 1, step: 0.001, def: 0.05, advanced: true },
+      { key: 'vnoise.chromaNoiseDetail', type: 'int', label: 'Chroma noise detail', min: 1, max: 5, def: 1, advanced: true },
+      { key: 'vnoise.chromaPhaseNoise', type: 'float', label: 'Chroma phase noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Random jitter in the decoder reference phase, so hue wanders line by line.' },
+      { key: 'vnoise.snow', type: 'float', label: 'Snow', min: 0, max: 1, step: 0.001, def: 0, hint: 'Sparse bright specks from dropouts in the signal, rather than the dense grain of tuner noise.' },
+      { key: 'vnoise.snowAnisotropy', type: 'float', label: 'Snow anisotropy', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'How far each speck smears horizontally. At 1 they are streaks rather than dots.' },
+    ],
+  },
+  {
+    id: 'headswitch',
+    label: 'Head Switching & Tracking',
+    kind: 'tape',
+    enableKey: 'headswitch.enabled',
+    hint: 'The rotating head drum, and what happens when the tracking is not quite right. These are the faults that say "videotape" faster than anything else in the application.',
+    params: [
+      { key: 'headswitch.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'headswitch.height', type: 'int', label: 'Head switching height', min: 0, max: 48, def: 8, unit: 'lines', hint: 'How many lines at the bottom of the picture are torn by the drum swapping heads.' },
+      { key: 'headswitch.offset', type: 'int', label: 'Head switching offset', min: 0, max: 48, def: 3, unit: 'lines', advanced: true },
+      { key: 'headswitch.shift', type: 'float', label: 'Horizontal shift', min: -100, max: 100, step: 0.1, def: 72, unit: 'px', hint: 'How far those lines are thrown sideways.' },
+      { key: 'headswitch.midLine', type: 'bool', label: 'Start mid-line', def: false, advanced: true, hint: 'The switch happens part way along a line rather than at its start, which is what really happened.' },
+      { key: 'headswitch.midLinePosition', type: 'float', label: 'Mid-line position', min: 0, max: 1, step: 0.001, def: 0.95, advanced: true },
+      { key: 'headswitch.midLineJitter', type: 'float', label: 'Mid-line jitter', min: 0, max: 1, step: 0.001, def: 0.1, advanced: true },
+      { key: 'headswitch.tracking', type: 'float', label: 'Tracking noise', min: 0, max: 1, step: 0.001, def: 0, hint: 'A band of torn, noisy picture drifting up the screen — the thing you used to fix by holding the tracking button down.' },
+      { key: 'headswitch.trackingHeight', type: 'int', label: 'Tracking band height', min: 0, max: 60, def: 24, unit: 'lines', advanced: true },
+      { key: 'headswitch.trackingWave', type: 'float', label: 'Tracking wave', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'How much the band bends the picture sideways as well as adding noise.' },
+      { key: 'headswitch.trackingSnow', type: 'float', label: 'Tracking snow', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
+    ],
+  },
+];
 
 const VIDEO_GROUPS: Group[] = [
   {
@@ -562,8 +689,14 @@ const LINK_GROUPS: Group[] = [
   },
 ];
 
-export const GROUPS: Group[] = [...VIDEO_GROUPS, ...AUDIO_GROUPS, ...LINK_GROUPS];
+export const GROUPS: Group[] = [
+  ...TAPE_GROUPS,
+  ...VIDEO_GROUPS,
+  ...AUDIO_GROUPS,
+  ...LINK_GROUPS,
+];
 
+export const TAPE_GROUP_IDS = TAPE_GROUPS.map((g) => g.id);
 export const VIDEO_GROUP_IDS = VIDEO_GROUPS.map((g) => g.id);
 export const AUDIO_GROUP_IDS = AUDIO_GROUPS.map((g) => g.id);
 

@@ -29,6 +29,22 @@ export interface SectionHelp {
 }
 
 export const SECTION_HELP: Record<string, SectionHelp> = {
+  composite: {
+    what: 'The composite signal itself. Luma and the two colour-difference channels are modulated onto a single subcarrier at 227.5 cycles per line, band-limited, and then separated again at the other end. Nothing in this section is drawn on: dot crawl, rainbow cross-colour and comb fringing all fall out of doing that round trip for real.',
+    how: 'Chroma demodulation is the decision that matters most — Box is a cheap set and leaves maximum dot crawl, a 2-line comb is a good late-model one and leaves almost none. Scanline phase shift decides whether the dot pattern creeps diagonally, straight up, or sits still. If you render at a higher resolution and the artefacts look too fine, raise Bandwidth scale rather than touching anything else.',
+  },
+  tape: {
+    what: 'The videotape itself: what a domestic deck could store and read back. Tape speed is not a style control, it is a pair of bandwidth numbers, and everything people recognise about a long-play recording follows from those numbers being small.',
+    how: 'Set the speed first and judge everything else after. SP is a careful recording, EP is six hours crammed onto one cassette and barely has colour left. Output sharpen is the deck trying to put back what the tape lost and overdoing it — that halo is one of the most recognisable VHS signatures, so leave some of it in. Edge wave belongs with it: a tape that does not wander at all does not read as a tape.',
+  },
+  vnoise: {
+    what: 'Noise introduced in the signal domain rather than painted onto the finished picture. Because it is added before decoding, it goes through the same filters and the same chroma separation as the picture does, which is why it lands as horizontal streaks and blotchy colour rather than as film grain.',
+    how: 'Composite noise is the honest one — it hits brightness and colour together the way real noise did. Chroma noise at a low frequency gives the blotchy, drifting colour of a tired tape and is worth more than any amount of luma noise. Keep Snow sparse; it models dropouts, not static, and the Signal & Reception section upstairs already does static properly.',
+  },
+  headswitch: {
+    what: 'The rotating head drum and the tracking servo. The drum swaps heads near the bottom of every field, and when the tracking is not quite right a band of the picture tears and fills with noise.',
+    how: 'Head switching along the bottom edge should essentially always be on — every helical-scan playback that has ever existed had it, and its absence is more noticeable than its presence. Tracking noise is the dramatic one: a band drifting up the screen, the thing you used to fix by holding the tracking button down. Keyframe it so it arrives and passes rather than leaving it running.',
+  },
   picture: {
     what: 'The four knobs that were on the front of every television, plus how the source file is read. These act on the signal before it reaches the tube, exactly where they sat on a real set — which is why turning Contrast up makes the beam bloom rather than simply making the image lighter.',
     how: 'Set these first and leave them roughly alone. They are the baseline the rest of the app is tuned against: if you find yourself fighting a preset, it is usually Brightness and Contrast that want nudging, not the twenty controls further down.',
@@ -119,6 +135,63 @@ export const SECTION_HELP: Record<string, SectionHelp> = {
  * one-line hint already answers "what is it".
  */
 export const PARAM_HELP: Record<string, string> = {
+  /* ---------------- composite (tape engine) ---------------- */
+  'composite.enabled': 'Bypasses the composite encode and decode entirely, so the tape section acts on an untouched picture. Switch it off to see how much of the look is coming from the signal model rather than from the tube.',
+  'composite.bandwidthScale': 'Multiplies every frequency in the signal model at once. The artefacts are defined in cycles across a line, so at a higher render resolution they would otherwise become too fine to see — raise this and the look stays put as the pixel count changes.',
+  'composite.demodulation': 'How colour is pulled back out of the composite signal, and the single biggest decision in this section. Box is a flat average and leaves the most dot crawl and rainbow, which is what a cheap set did. Notch removes the subcarrier band and takes real detail with it. The comb filters compare against neighbouring lines, cancelling almost all dot crawl at the cost of colour fringing wherever the picture changes vertically.',
+  'composite.phaseShift': 'How far the subcarrier advances from one line to the next. This is what makes dot crawl crawl rather than sit still: at 90° it creeps diagonally over a four-field cycle, at 180° it climbs straight up, and at 0° it is stationary and immediately looks wrong.',
+  'composite.phaseShiftOffset': 'Which field of the four-field colour sequence the first frame starts on. Changes where in the cycle the pattern begins; useful only when matching a specific capture.',
+  'composite.preemphasis': 'Transmission chains boosted high frequencies before sending and cut them again on receipt, to get above the noise floor. At 1.0 the two match. Away from 1.0 they do not, and you get the sharpened, ringing edge that every analogue picture had.',
+  'composite.ringing': 'Overshoot from the band-limiting filter, seen as a bright echo trailing each hard vertical edge. Distinct from the tube\u2019s own ringing in that it happens in the signal, so it is encoded and decoded along with the picture.',
+  'composite.ringingFrequency': 'Where in the band the filter rings. Lower values put the echo further from the edge and make it broader and more obvious.',
+  'composite.ringingPower': 'How sharply the filter cuts off, and therefore how many visible ripples follow an edge before it settles. Higher is a steeper filter and a busier fringe.',
+  'composite.chromaLowpassIn': 'How hard colour is filtered before it is encoded onto the carrier. Real equipment filtered it heavily because the chroma channel is narrow, so some of this is correct rather than a fault. Raising it smears colour horizontally before anything else happens to it.',
+  'composite.chromaLowpassOut': 'A second filter after decoding, to suppress what is left of the subcarrier. Raising it cleans up the dot pattern at the cost of colour detail; lowering it leaves the decoded picture visibly fizzing.',
+  'composite.chromaDelayH': 'Colour is filtered harder than brightness, which delays it, so it arrives late and sits to one side of the object it belongs to. A pixel or so is typical of a real decoder.',
+  'composite.chromaDelayV': 'The same error vertically, which is rarer and comes from the comb filter rather than the band-limiting. Small values only.',
+  'composite.chromaPhaseError': 'A constant error in the decoder\u2019s reference phase. Because hue is carried as the phase of the subcarrier, getting that reference wrong rotates every colour in the picture at once — this is the fault the Tint knob on an NTSC set existed to cancel.',
+  'composite.lumaSmear': 'The video amplifier fails to settle coming off a bright area, so brightness drags to the right out of highlights. Reads as a cheap deck or a long cable rather than as a blur.',
+
+  /* ---------------- tape ---------------- */
+  'tape.enabled': 'Bypasses the videotape stage, leaving the composite signal model running on its own. That combination is a broadcast feed rather than a recording, and is the right starting point for something that was meant to be live.',
+  'tape.speed': 'Which recording mode the tape was made in, which sets the luma and chroma bandwidth together exactly as the real format did. SP is the best a domestic deck managed; LP is softer with the colour starting to go; EP crams six hours onto one cassette and has barely any chroma left. Choose this before touching anything else in the section.',
+  'tape.chromaLoss': 'Colour drops out completely on random lines. This is what a genuinely worn tape does — chroma is recorded at a lower frequency and in a more fragile way than luma, so it fails first and brightness carries on long after the picture has gone monochrome in patches.',
+  'tape.chromaVertBlend': 'VHS averaged colour between adjacent lines to save bandwidth, so vertical colour detail is half what the luma has. Leave it on for anything claiming to be a tape; switching it off is a broadcast signal.',
+  'tape.sharpen': 'The deck\u2019s output stage trying to put back the detail the tape lost, and overshooting. The resulting bright halo on every edge is one of the most recognisable VHS signatures, and leaving it at zero makes footage look soft rather than taped.',
+  'tape.sharpenFrequency': 'Which band the sharpener works on. Higher values target finer detail and give a tighter halo; lower values give a broad, obvious glow around edges.',
+  'tape.edgeWave': 'The tape wanders against the head, so each line starts at a slightly wrong place and the left edge of the picture ripples. Measured in pixels of displacement. A small amount is present on every real tape.',
+  'tape.edgeWaveSpeed': 'How quickly the ripple changes over time. Slow values breathe, fast values shimmer.',
+  'tape.edgeWaveFrequency': 'How quickly the displacement varies down the picture. Low values bend the whole frame as one; high values make neighbouring lines disagree and the edge goes ragged.',
+  'tape.edgeWaveDetail': 'Octaves of noise in the ripple. One octave is a smooth bend; more adds finer wobble on top, which reads as a worse-maintained transport.',
+
+  /* ---------------- signal noise ---------------- */
+  'vnoise.enabled': 'Bypasses all four noise sources in the signal domain. The tube has its own snow and grain upstairs — this section is the noise that existed before the picture was ever displayed.',
+  'vnoise.compositeNoise': 'Noise added to the composite signal itself, before anything is decoded. The most physically honest of the four, because it goes through chroma separation along with the picture and therefore disturbs brightness and colour together the way real noise did.',
+  'vnoise.compositeNoiseFrequency': 'How fine the noise is. Low frequencies give broad horizontal bands rolling through the picture; high frequencies give a fizz close to grain.',
+  'vnoise.compositeNoiseDetail': 'How many octaves of noise are summed. One is smooth and banded; more adds finer structure on top without changing the overall scale.',
+  'vnoise.lumaNoise': 'Noise on brightness alone, applied after decoding. Less physically motivated than composite noise but easier to control when you want grain without disturbing the colour.',
+  'vnoise.lumaNoiseFrequency': 'How fine the brightness noise is, from slow banding to fine grain.',
+  'vnoise.lumaNoiseDetail': 'Octaves summed into the brightness noise. One octave is smooth and banded; adding more layers finer structure on top without changing the overall scale of the noise.',
+  'vnoise.chromaNoise': 'Noise on colour alone. At a low frequency this is the blotchy, drifting colour of a tired tape, and it does more for the impression of age than luma noise does — the eye forgives grain and does not forgive wandering colour.',
+  'vnoise.chromaNoiseFrequency': 'How fine the colour noise is. Keep it low: large, slow blotches read as a tape, fine colour speckle reads as a digital fault.',
+  'vnoise.chromaNoiseDetail': 'Octaves summed into the colour noise. Keep this low — multiple octaves of chroma noise start to look like coloured grain, and the blotchy single-octave version is the one that reads as a worn tape.',
+  'vnoise.chromaPhaseNoise': 'Random jitter in the decoder\u2019s reference phase from line to line, so hue wanders down the picture. Because it is phase rather than amplitude, colours shift rather than getting noisier, which is a very specific and very analogue kind of wrong.',
+  'vnoise.snow': 'Sparse bright specks from dropouts in the signal. Distinct from the tuner snow in Signal & Reception, which is dense grain from a weak aerial — this is an occasional hard hit on an otherwise good signal.',
+  'vnoise.snowAnisotropy': 'How far each speck smears along the line. At 0 they are dots; at 1 they are short horizontal streaks, which is what a dropout actually looks like once it has been through the band-limiting.',
+
+  /* ---------------- head switching ---------------- */
+  'headswitch.enabled': 'Bypasses head switching and tracking noise. Worth toggling to see how much of the tape impression is coming from the bottom few lines alone — usually more than expected.',
+  'headswitch.height': 'How many lines at the bottom of the picture are torn by the drum swapping from one head to the other. Real decks put it in the last handful of lines, mostly below the visible area, so a small number with some overscan is the honest setting.',
+  'headswitch.offset': 'How far up from the bottom edge the torn band sits. Raising it lifts the damage into the visible picture, which is what a misaligned deck did.',
+  'headswitch.shift': 'How far the torn lines are thrown sideways. Large values give the hard diagonal slash across the bottom of the frame that is instantly recognisable as videotape.',
+  'headswitch.midLine': 'The head switch happens part way along a line rather than neatly at its start, so the tear begins in the middle of the picture. This is what really happened, and it looks considerably more convincing than a clean full-width band.',
+  'headswitch.midLinePosition': 'Where along the line the switch occurs, from the left edge to the right. Near the right-hand edge is typical.',
+  'headswitch.midLineJitter': 'How much that position wanders from line to line, so the left edge of the tear is ragged rather than a straight vertical cut.',
+  'headswitch.tracking': 'A band of torn, noisy picture drifting slowly up the screen — the fault you used to correct by holding the tracking button down. The single most evocative control in the tape engine, and the one most worth keyframing so it arrives and passes rather than sitting there.',
+  'headswitch.trackingHeight': 'How many lines tall the tracking band is. Tall bands swallow a large part of the picture; short ones read as a brief glitch passing through.',
+  'headswitch.trackingWave': 'How much the band bends the picture sideways in addition to adding noise. Without some of this the band looks like an overlay rather than like the signal breaking down.',
+  'headswitch.trackingSnow': 'How much extra snow fills the tracking band. High values turn the band into pure static, which is the worst case of a tape that has been paused in the same place too many times.',
+
   /* ---------------- picture ---------------- */
   'picture.brightness': 'Adds a constant offset to luma, which is what the Brightness knob on a television actually did — it set the black level, not the overall lightness. Positive values grey the blacks the way a mis-set or ageing set does; negative values crush them. Small amounts: ±0.05 is already visible.',
   'picture.contrast': 'Scales luma around mid-grey, which is the drive into the tube. Because the beam blooms with current, pushing this past 1.0 does not simply brighten the picture — highlights swell and smear outward, which is the correct and slightly ugly behaviour of a set turned up too far.',
