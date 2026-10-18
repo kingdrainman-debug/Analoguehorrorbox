@@ -44,11 +44,20 @@ const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
 });
 
+async function measure(backend, sizes) {
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+await page.addInitScript((b) => {
+  try {
+    localStorage.setItem('crtbox.backend', b);
+    localStorage.setItem('crtbox.guide.hideOnStart', '1');
+  } catch {
+    /* private window */
+  }
+}, backend);
 await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
 await page.waitForTimeout(1800);
 
-const results = await page.evaluate(async () => {
+const results = await page.evaluate(async (sizeList) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   document.querySelector('.guide-close')?.click();
   await sleep(300);
@@ -73,11 +82,7 @@ const results = await page.evaluate(async () => {
   const canvas = document.querySelector('.stage canvas');
   const out = [];
 
-  for (const [label, w, h] of [
-    ['480p  640x480', 640, 480],
-    ['720p 1280x720', 1280, 720],
-    ['1080p 1920x1080', 1920, 1080],
-  ]) {
+  for (const [label, w, h] of sizeList) {
     canvas.width = w;
     canvas.height = h;
     await sleep(500);
@@ -96,16 +101,52 @@ const results = await page.evaluate(async () => {
     out.push({ label, w, h, ms, fps: 1000 / ms, mpxPerSec: (w * h) / (ms / 1000) / 1e6 });
   }
   return out;
-});
-
-console.log('CRTBOX render throughput — SwiftShader (software), a floor not a ceiling\n');
-for (const r of results) {
-  console.log(
-    `  ${r.label.padEnd(16)} ${r.ms.toFixed(1).padStart(7)} ms/frame   ${r.fps.toFixed(1).padStart(6)} fps   ${r.mpxPerSec.toFixed(1).padStart(5)} Mpx/s`,
-  );
+}, sizes);
+  await page.close();
+  return results;
 }
-console.log('\n  Full chain: tape engine (composite encode/decode + VHS) then tube');
-console.log('  (signal, persistence, burn-in, bloom, halation, final tube pass).');
+
+// The CPU path is measured at smaller frames: at 1080p a single frame takes
+// long enough that the browser would be considered hung, which tells you
+// nothing you could not work out from the 480p figure.
+const GPU_SIZES = [
+  ['480p  640x480', 640, 480],
+  ['720p 1280x720', 1280, 720],
+  ['1080p 1920x1080', 1920, 1080],
+];
+const CPU_SIZES = [
+  ['240p  426x240', 426, 240],
+  ['480p  640x480', 640, 480],
+];
+
+const gpu = await measure('gpu', GPU_SIZES);
+const cpu = await measure('cpu', CPU_SIZES);
+
+const show = (name, rows) => {
+  console.log(`\n${name}`);
+  for (const r of rows) {
+    console.log(
+      `  ${r.label.padEnd(16)} ${r.ms.toFixed(1).padStart(8)} ms/frame   ${r.fps.toFixed(2).padStart(7)} fps   ${r.mpxPerSec.toFixed(2).padStart(6)} Mpx/s`,
+    );
+  }
+};
+
+console.log('CRTBOX render throughput — full chain: tape engine then tube.');
+console.log('No GPU in this container, so the GPU backend is itself running on');
+console.log('SwiftShader. Both columns are floors; real hardware moves the GPU');
+console.log('row by orders of magnitude and the CPU row hardly at all.');
+
+show('GPU backend (WebGL2, here via SwiftShader)', gpu);
+show('CPU backend (plain JavaScript, single-threaded)', cpu);
+
+const g480 = gpu.find((r) => r.label.includes('640x480'));
+const c480 = cpu.find((r) => r.label.includes('640x480'));
+if (g480 && c480) {
+  console.log(
+    `\n  At 640x480 the CPU backend is ${(c480.ms / g480.ms).toFixed(1)}x slower than a software GPU,`,
+  );
+  console.log('  and the gap against a real one is far wider. It is a fallback, not a default.');
+}
 
 await browser.close();
 server.close();

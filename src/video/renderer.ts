@@ -9,6 +9,8 @@ import {
 } from './gl';
 import { Settings, bool, code, num } from '../core/params';
 import { beamNormalisation, maskNormalisation } from './normalization';
+import { RenderTelemetry, TubeState } from './state';
+import type { FrameSource } from './backend';
 
 import quadVert from './shaders/quad.vert.glsl?raw';
 import common from './shaders/common.glsl?raw';
@@ -37,17 +39,7 @@ export interface RenderFrame {
   seed: number;
 }
 
-/** State the renderer computes that the audio engine wants to follow. */
-export interface RenderTelemetry {
-  /** Vertical position of the hum bar, 0..1. */
-  humPhase: number;
-  /** 0..1 — how badly the picture is glitching right now. */
-  glitch: number;
-  /** Decaying degauss envelope. */
-  degauss: number;
-  /** 0 = collapsed, 1 = fully scanned. */
-  powerOpen: number;
-}
+export type { RenderTelemetry } from './state';
 
 type Programs = {
   ntsc: WebGLProgram;
@@ -82,13 +74,9 @@ export class CrtRenderer {
   private internalH = 0;
 
   // Animated state that has to persist between frames.
-  private humPhase = 0;
-  private degaussStart = -1e9;
-  private powerChangedAt = -1e9;
-  private lastPowerState = 'on';
-  private powerOpen = 1;
-  private powerDot = 0;
-  private glitch = 0;
+  // Envelopes the audio engine follows. Shared with the CPU backend so the
+  // sound behaves identically whichever one is rasterising.
+  private state = new TubeState();
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -160,7 +148,7 @@ export class CrtRenderer {
    * texImage2D(video) is the path browsers optimise for, so the reallocation
    * costs far less than the name suggests.
    */
-  setSource(source: TexImageSource | null, width: number, height: number): void {
+  setSource(source: FrameSource | null, width: number, height: number): void {
     const gl = this.gl;
     if (!source || width < 1 || height < 1) return;
     // Bind to a known unit; without this the upload lands on whichever unit the
@@ -225,7 +213,7 @@ export class CrtRenderer {
   }
 
   triggerDegauss(now: number): void {
-    this.degaussStart = now;
+    this.state.triggerDegauss(now);
   }
 
   private draw(program: WebGLProgram, target: Target | null): void {
@@ -248,60 +236,7 @@ export class CrtRenderer {
    * of the app agree about what the set is doing.
    */
   private advanceState(f: RenderFrame): RenderTelemetry {
-    const s = f.settings;
-    const dt = Math.max(0, Math.min(f.dt, 0.25));
-
-    this.humPhase = (this.humPhase + num(s, 'tube.humBarSpeed') * dt * 0.35) % 1;
-    if (this.humPhase < 0) this.humPhase += 1;
-
-    // Mirror of the shader's glitch sources, so the audio can react to the same
-    // events without reading pixels back off the GPU.
-    const faultsOn = bool(s, 'sync.enabled');
-    let target = 0;
-    if (faultsOn) {
-      const tearing = num(s, 'sync.tearing');
-      const vHold = num(s, 'sync.vHold');
-      const head = num(s, 'sync.headSwitch');
-      const r = pseudoNoise(f.time * 3.1 + f.seed * 17.0);
-      const burst = pseudoNoise(f.time * 0.7 + f.seed * 3.0);
-      target =
-        Math.max(0, r - (1 - tearing * 0.5)) * 2 +
-        Math.max(0, burst - (1 - vHold * 0.9)) * 1.5 +
-        head * 0.12;
-    }
-    target = Math.min(1, target + num(s, 'signal.signalLoss'));
-    // Fast attack, slow release — a tear is instantaneous, the recovery is not.
-    const k = target > this.glitch ? 0.75 : Math.min(1, dt * 6);
-    this.glitch += (target - this.glitch) * k;
-
-    // Power state animation.
-    const state = String(s['faults.powerState'] ?? 'on');
-    if (state !== this.lastPowerState) {
-      this.lastPowerState = state;
-      this.powerChangedAt = f.time;
-    }
-    const warm = Math.max(0.05, num(s, 'faults.warmup'));
-    const since = Math.max(0, f.time - this.powerChangedAt);
-    if (state === 'warming') {
-      const t = Math.min(1, since / warm);
-      this.powerOpen = Math.pow(t, 0.35);
-      this.powerDot = 0;
-    } else if (state === 'collapsing') {
-      const t = Math.min(1, since / (warm * 0.45));
-      this.powerOpen = Math.pow(1 - t, 2.2);
-      this.powerDot = Math.exp(-Math.max(0, since - warm * 0.45) * 1.6);
-    } else {
-      this.powerOpen = 1;
-      this.powerDot = 0;
-    }
-
-    const degaussAge = f.time - this.degaussStart;
-    const degauss =
-      degaussAge >= 0 && degaussAge < 4
-        ? num(s, 'faults.degauss') * Math.exp(-degaussAge * 1.9)
-        : 0;
-
-    return { humPhase: this.humPhase, glitch: this.glitch, degauss, powerOpen: this.powerOpen };
+    return this.state.advance(f.settings, f.time, f.dt, f.seed);
   }
 
   render(f: RenderFrame): RenderTelemetry {
@@ -643,8 +578,8 @@ export class CrtRenderer {
       u.f('u_dirt', num(s, 'faults.dirt'));
       u.f('u_moire', num(s, 'faults.moire'));
       u.f('u_degauss', telemetry.degauss);
-      u.f('u_powerOpen', this.powerOpen);
-      u.f('u_powerDot', this.powerDot);
+      u.f('u_powerOpen', telemetry.powerOpen);
+      u.f('u_powerDot', this.state.powerDot);
 
       u.f('u_bezel', num(s, 'output.bezel'));
       u.f('u_bezelShadow', num(s, 'output.bezelShadow'));
@@ -671,19 +606,4 @@ export class CrtRenderer {
     for (const p of Object.values(this.programs)) gl.deleteProgram(p);
     this.uniforms.clear();
   }
-}
-
-/** Deterministic value noise in [0,1) — the CPU twin of the shader's hash. */
-function pseudoNoise(x: number): number {
-  const i = Math.floor(x);
-  const f = x - i;
-  const s = f * f * (3 - 2 * f);
-  return h(i) * (1 - s) + h(i + 1) * s;
-}
-
-function h(n: number): number {
-  let p = Math.abs(n * 0.1031) % 1;
-  p *= p + 33.33;
-  p *= p + p;
-  return p % 1;
 }

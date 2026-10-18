@@ -1303,6 +1303,158 @@ if (tapeEngine.error) {
   }
 }
 
+/* -------- 12. the CPU backend -------- */
+
+/*
+ * A second renderer that needs no GPU. The assertion that matters is not that
+ * it draws something, but that it draws the *same* picture: a backend that
+ * quietly diverges is worse than one that fails, because the fallback would
+ * silently change people's work.
+ *
+ * Compared with the time-varying sections switched off, since snow, glitching
+ * and sync faults are reseeded per page load and would swamp the comparison.
+ * A per-pixel difference remains even so, because the composite subcarrier
+ * pattern depends on the frame counter at the moment of capture and the two
+ * backends are measured in separate page loads — so the mean is asserted
+ * tightly and the per-pixel figure loosely.
+ */
+
+const cpuBackend = await (async () => {
+  const out = { gpuMean: 0, cpuMean: 0, gpuLit: 0, cpuLit: 0, perPixel: 0, selected: '', error: null };
+
+  const grab = async (backend) => {
+    const p = await browser.newPage({ viewport: { width: 1100, height: 820 } });
+    const errs = [];
+    p.on('pageerror', (e) => errs.push(e.message));
+    await p.addInitScript((b) => {
+      try {
+        localStorage.setItem('crtbox.backend', b);
+        localStorage.setItem('crtbox.guide.hideOnStart', '1');
+      } catch {
+        /* private window */
+      }
+    }, backend);
+    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+    await p.waitForTimeout(1600);
+    const r = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
+      const c = document.createElement('canvas');
+      c.width = 320;
+      c.height = 240;
+      const g = c.getContext('2d');
+      ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach((col, i) => {
+        g.fillStyle = col;
+        g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 150);
+      });
+      g.fillStyle = '#fff';
+      for (let x = 0; x < 320; x += 3) g.fillRect(x, 160, 1, 80);
+      const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 't.png', { type: 'image/png' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      await sleep(700);
+
+      const sect = (t) =>
+        [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
+      const enable = (t, v) => {
+        const cb = sect(t)?.querySelector(".group-actions input[type='checkbox']");
+        if (cb && cb.checked !== v) cb.click();
+      };
+      const tab = (n) =>
+        [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === n)?.click();
+
+      tab('Tape');
+      await sleep(250);
+      enable('Signal Noise', false);
+      enable('Head Switching & Tracking', false);
+      tab('Tube');
+      await sleep(250);
+      enable('Sync & Timebase', false);
+      enable('Faults & Wear', false);
+      enable('Glitching', false);
+      await sleep(400);
+      const row = (l) =>
+        [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === l);
+      const setI = (el, v) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      for (const [l, v] of [['Snow', 0], ['Dither', 0], ['Flicker', 0], ['Hum bar', 0]]) {
+        const rw = row(l);
+        if (rw) setI(rw.querySelector("input[type='range']"), v);
+      }
+      await sleep(2000);
+
+      const app = document.querySelector('.stage canvas');
+      const probe = document.createElement('canvas');
+      probe.width = 180;
+      probe.height = 135;
+      const pg = probe.getContext('2d', { willReadFrequently: true });
+      pg.drawImage(app, 0, 0, probe.width, probe.height);
+      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
+      let sum = 0;
+      let lit = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const m = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        sum += m;
+        if (m > 24) lit++;
+      }
+      return {
+        px: Array.from(d),
+        mean: sum / (d.length / 4),
+        lit: lit / (probe.width * probe.height),
+        selected: document.querySelector('.backend-select')?.value ?? '',
+      };
+    });
+    await p.close();
+    return { ...r, errs };
+  };
+
+  try {
+    const g = await grab('gpu');
+    const c = await grab('cpu');
+    if (c.errs.length) throw new Error(`CPU backend threw: ${c.errs[0]}`);
+    out.gpuMean = g.mean;
+    out.cpuMean = c.mean;
+    out.gpuLit = g.lit;
+    out.cpuLit = c.lit;
+    out.selected = c.selected;
+    let diff = 0;
+    let n = 0;
+    for (let i = 0; i < g.px.length; i += 4) {
+      diff += Math.abs(g.px[i] - c.px[i]) + Math.abs(g.px[i + 1] - c.px[i + 1]) + Math.abs(g.px[i + 2] - c.px[i + 2]);
+      n++;
+    }
+    out.perPixel = diff / n;
+  } catch (err) {
+    out.error = String(err);
+  }
+  return out;
+})();
+
+if (cpuBackend.error) {
+  failures.push(`cpu backend: ${cpuBackend.error}`);
+} else {
+  if (cpuBackend.selected !== 'cpu') {
+    failures.push(`cpu backend: the selector reads "${cpuBackend.selected}", so the choice did not take`);
+  }
+  if (cpuBackend.cpuLit < 0.3) {
+    failures.push(`cpu backend: only ${(cpuBackend.cpuLit * 100).toFixed(1)}% of the frame is lit — it is not rendering`);
+  }
+  const meanDelta = Math.abs(cpuBackend.cpuMean - cpuBackend.gpuMean);
+  if (meanDelta > 6) {
+    failures.push(
+      `cpu backend: mean brightness ${cpuBackend.cpuMean.toFixed(1)} against the GPU's ${cpuBackend.gpuMean.toFixed(1)} — the two backends have diverged`,
+    );
+  }
+  if (cpuBackend.perPixel > 30) {
+    failures.push(
+      `cpu backend: ${cpuBackend.perPixel.toFixed(1)} per-pixel difference from the GPU, which is more than subcarrier phase can explain`,
+    );
+  }
+}
+
 await browser.close();
 server.close();
 
@@ -1341,6 +1493,9 @@ console.log(
 console.log(`  glitch    ${sections.glitchOnVsOff.toFixed(1)} per-pixel change when switched on`);
 console.log(
   `  guide     shown on start, closes, reopens, ${guide.tubes} tubes · ⓘ reveals ${guide.paramInfo.length} chars (param) / ${guide.sectionInfo.length} (section)`,
+);
+console.log(
+  `  cpu       mean ${cpuBackend.cpuMean.toFixed(1)} vs GPU ${cpuBackend.gpuMean.toFixed(1)} · ${cpuBackend.perPixel.toFixed(1)}/px apart · ${(cpuBackend.cpuLit * 100).toFixed(1)}% lit`,
 );
 console.log(
   `  tape      cross-colour ${tapeEngine.rainbowBox.toFixed(3)} box vs ${tapeEngine.rainbowComb.toFixed(3)} comb · dot crawl ${tapeEngine.crawlMoves.toFixed(1)} moving vs ${tapeEngine.staticPhase.toFixed(1)} static · SP→EP ${tapeEngine.spVsEp.toFixed(1)}/px`,

@@ -25,7 +25,8 @@ import {
 } from './core/timeline';
 import { Timeline } from './ui/Timeline';
 import { randomize, resetGroup } from './core/random';
-import { CrtRenderer, RenderTelemetry } from './video/renderer';
+import { RenderTelemetry } from './video/renderer';
+import { BackendChoice, BackendKind, Renderer, createRenderer } from './video/backend';
 import { CrtAudioEngine } from './audio/engine';
 import { GroupPanel } from './ui/GroupPanel';
 import { DEFAULT_EXPORT, ExportPanel, ExportSettings } from './ui/ExportPanel';
@@ -60,6 +61,16 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
   const [tab, setTab] = useState<Tab>('tape');
   const [advanced, setAdvanced] = useState(false);
+  const [backendChoice, setBackendChoice] = useState<BackendChoice>(() => {
+    try {
+      const v = localStorage.getItem('crtbox.backend');
+      return v === 'cpu' || v === 'gpu' ? v : 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  const [backendKind, setBackendKind] = useState<BackendKind>('gpu');
+  const [backendNote, setBackendNote] = useState('');
   // Batch renders have no user and must never block on a dialog.
   const [guideOpen, setGuideOpen] = useState(() => !isBatchMode && shouldShowOnStartup());
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
@@ -99,7 +110,7 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const rendererRef = useRef<CrtRenderer | null>(null);
+  const rendererRef = useRef<Renderer | null>(null);
   const engineRef = useRef<CrtAudioEngine>(new CrtAudioEngine(seed));
   const settingsRef = useRef(settings);
   const timelineRef = useRef(timeline);
@@ -145,7 +156,15 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     try {
-      rendererRef.current = new CrtRenderer(canvas);
+      const { renderer, kind, fellBack } = createRenderer(canvas, backendChoice);
+      rendererRef.current = renderer;
+      setBackendKind(kind);
+      setGlError('');
+      setBackendNote(
+        fellBack
+          ? `No usable GPU (${fellBack}) — rendering on the CPU instead. It works, and it is slower.`
+          : '',
+      );
     } catch (err) {
       setGlError(err instanceof Error ? err.message : String(err));
       return;
@@ -154,6 +173,18 @@ export default function App() {
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
+    // A canvas keeps whichever context it was first given, so switching backend
+    // remounts the element via the key below rather than reusing it.
+  }, [backendChoice]);
+
+  const chooseBackend = useCallback((next: BackendChoice) => {
+    setBackendChoice(next);
+    try {
+      if (next === 'auto') localStorage.removeItem('crtbox.backend');
+      else localStorage.setItem('crtbox.backend', next);
+    } catch {
+      /* private window — the choice simply does not persist */
+    }
   }, []);
 
   /* ---------------- canvas sizing ---------------- */
@@ -1149,6 +1180,21 @@ export default function App() {
             Advanced
           </label>
 
+          <label
+            className="inline"
+            title="Which rasteriser draws the picture. Automatic uses the GPU and falls back to the CPU if there is not a usable one."
+          >
+            <select
+              className="backend-select"
+              value={backendChoice}
+              onChange={(e) => chooseBackend(e.target.value as BackendChoice)}
+            >
+              <option value="auto">Auto ({backendKind.toUpperCase()})</option>
+              <option value="gpu">GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </label>
+
           <button
             className="guide-btn"
             onClick={() => setGuideOpen(true)}
@@ -1285,7 +1331,7 @@ export default function App() {
                 }}
               />
             )}
-            <canvas ref={canvasRef} />
+            <canvas key={backendChoice} ref={canvasRef} />
             {!media && (
               <div className="dropzone">
                 <p>Drop a video or an image here</p>
@@ -1400,6 +1446,12 @@ export default function App() {
           </section>
         </main>
       </div>
+
+      {backendNote && (
+        <div className="toast" onClick={() => setBackendNote('')}>
+          {backendNote}
+        </div>
+      )}
 
       {notice && (
         <div className="toast" onClick={() => setNotice('')}>

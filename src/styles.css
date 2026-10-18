@@ -1391,3 +1391,17 @@ input[type='range']:disabled::-webkit-slider-thumb {
   color: var(--text);
   border-bottom-color: var(--text);
 }
+
+.backend-select {
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+
+.backend-select:hover {
+  color: var(--text);
+}

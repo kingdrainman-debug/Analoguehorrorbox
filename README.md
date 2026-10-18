@@ -82,6 +82,31 @@ pattern, box demodulation leaves about 2.6× the false colour a 2-line comb
 does, and at a 180° scanline phase shift the dot pattern inverts every frame
 instead of standing still. Both are asserted by the smoke test.
 
+### Two renderers
+
+The chain can be rasterised two ways, chosen from the dropdown in the header.
+
+| | |
+|---|---|
+| **GPU** | WebGL2. The chain is a handful of full-screen draws, which is what graphics hardware is for. Use it whenever it exists. |
+| **CPU** | Plain JavaScript on a 2D canvas. Needs no GPU at all. |
+
+**Auto** tries the GPU and falls back rather than failing, which matters more
+than it sounds: the app previously refused to start at all where WebGL2 was
+missing, blacklisted by a driver or disabled by policy. The CPU path also gives
+bit-identical output on every machine, where GPU floating point varies between
+vendors — so a render that has to be reproducible has a way to be.
+
+It is much slower, and always will be. `npm run bench` prints both; in a
+container with no GPU at all the CPU backend is about 5× slower than
+SwiftShader, which is itself a software rasteriser, so the gap against real
+hardware is far wider. It is a fallback, not a default.
+
+Both produce the same picture, and the smoke test asserts it: mean brightness
+within a point or two, with the remaining per-pixel difference accounted for by
+the composite subcarrier phase, which depends on the frame counter at the
+moment of capture.
+
 ### Finding your way around
 
 The app opens on a **guide** covering how to get footage in, what each reference
