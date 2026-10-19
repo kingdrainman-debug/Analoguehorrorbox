@@ -1,7 +1,7 @@
 {
   "name": "crtbox",
   "productName": "CRTBOX",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Analogue Horror Box — a composite/VHS signal emulator and a CRT television emulator in one application, for picture and sound.",
   "license": "MIT",
   "private": true,
