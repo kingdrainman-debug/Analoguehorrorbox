@@ -45,6 +45,10 @@ export const SECTION_HELP: Record<string, SectionHelp> = {
     what: 'The rotating head drum and the tracking servo. The drum swaps heads near the bottom of every field, and when the tracking is not quite right a band of the picture tears and fills with noise.',
     how: 'Head switching along the bottom edge should essentially always be on — every helical-scan playback that has ever existed had it, and its absence is more noticeable than its presence. Tracking noise is the dramatic one: a band drifting up the screen, the thing you used to fix by holding the tracking button down. Keyframe it so it arrives and passes rather than leaving it running.',
   },
+  engine: {
+    what: 'A master bypass for each of the two emulators. The Tape engine is the signal — composite encode and decode, the videotape, signal noise, head switching. The Tube engine is the display — reception, geometry, beam, phosphor, glow, tube response and wear.',
+    how: 'Use these to work out where something is coming from. If an artefact you do not want survives switching the Tape engine off, it belongs to the tube, and the other way round. They are also the quickest route to the two half-looks that are genuinely useful on their own: a clean signal on a bad tube, and a bad tape shown flat.',
+  },
   picture: {
     what: 'The four knobs that were on the front of every television, plus how the source file is read. These act on the signal before it reaches the tube, exactly where they sat on a real set — which is why turning Contrast up makes the beam bloom rather than simply making the image lighter.',
     how: 'Set these first and leave them roughly alone. They are the baseline the rest of the app is tuned against: if you find yourself fighting a preset, it is usually Brightness and Contrast that want nudging, not the twenty controls further down.',
@@ -135,6 +139,10 @@ export const SECTION_HELP: Record<string, SectionHelp> = {
  * one-line hint already answers "what is it".
  */
 export const PARAM_HELP: Record<string, string> = {
+  /* ---------------- engine masters ---------------- */
+  'engine.tape': 'Switches off the entire signal half in one go — composite encode and decode, the videotape, signal noise and head switching — rather than making you find four separate section switches. Travels in presets, so a look that is deliberately a clean feed on a bad tube records that fact.',
+  'engine.tube': 'Switches off the entire display half: reception, sync, geometry, beam and scanlines, phosphor and mask, glow, convergence, tube response, wear and glitching. What you are left with is the signal shown flat, which is the honest way to judge what the tape engine alone is doing.',
+
   /* ---------------- composite (tape engine) ---------------- */
   'composite.enabled': 'Bypasses the composite encode and decode entirely, so the tape section acts on an untouched picture. Switch it off to see how much of the look is coming from the signal model rather than from the tube.',
   'composite.bandwidthScale': 'Multiplies every frequency in the signal model at once. The artefacts are defined in cycles across a line, so at a higher render resolution they would otherwise become too fine to see — raise this and the look stays put as the pixel count changes.',

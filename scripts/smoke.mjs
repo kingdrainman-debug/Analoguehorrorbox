@@ -1499,6 +1499,158 @@ if (cpuBackend.error) {
   }
 }
 
+/* -------- 13. engine masters, and advanced parameters -------- */
+
+/*
+ * Two assertions that are easy to break and silent when broken:
+ *
+ *   - Each engine has a master bypass on its tab, and it genuinely bypasses
+ *     rather than only greying out the label. Checked by rendering the same
+ *     source in all four combinations and requiring them to differ.
+ *   - Advanced parameters are shown by default. They used to be hidden, which
+ *     made two thirds of the application invisible until you found a tickbox,
+ *     so a regression to that is worth catching.
+ */
+
+const masters = await (async () => {
+  const out = { advancedShown: false, states: {}, tapeStruck: false, error: null };
+  const p = await browser.newPage({ viewport: { width: 1300, height: 900 } });
+  try {
+    await p.addInitScript(() => {
+      try {
+        localStorage.clear();
+        localStorage.setItem('crtbox.guide.hideOnStart', '1');
+      } catch {
+        /* private window */
+      }
+    });
+    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+    await p.waitForTimeout(1600);
+    Object.assign(
+      out,
+      await p.evaluate(async () => {
+        const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
+        const res = {};
+
+        // 'Dropout length' is flagged advanced; with nothing configured it
+        // must be on screen once its section is open.
+        const sect = (t) =>
+          [...document.querySelectorAll('.group')].find(
+            (x) => x.querySelector('.group-title')?.textContent === t,
+          );
+        const open = (t) => {
+          const x = sect(t);
+          if (x && !x.classList.contains('open')) x.querySelector('.group-toggle').click();
+        };
+        open('VHS Tape');
+        await sleep(500);
+        res.advancedShown = [...document.querySelectorAll('.param-label')].some(
+          (l) => l.textContent === 'Edge wave detail',
+        );
+
+        const c = document.createElement('canvas');
+        c.width = 320;
+        c.height = 240;
+        const g = c.getContext('2d');
+        ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach((col, i) => {
+          g.fillStyle = col;
+          g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 160);
+        });
+        g.fillStyle = '#fff';
+        for (let x = 0; x < 320; x += 3) g.fillRect(x, 170, 1, 70);
+        const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], 't.png', { type: 'image/png' }));
+        window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+        await sleep(1800);
+
+        const app = document.querySelector('.stage canvas');
+        const probe = document.createElement('canvas');
+        probe.width = 180;
+        probe.height = 135;
+        const pg = probe.getContext('2d', { willReadFrequently: true });
+        const stats = () => {
+          pg.drawImage(app, 0, 0, probe.width, probe.height);
+          const d = pg.getImageData(0, 0, probe.width, probe.height).data;
+          let sum = 0;
+          let struct = 0;
+          for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+          for (let y = 1; y < probe.height; y++) {
+            for (let x = 0; x < probe.width; x += 4) {
+              struct += Math.abs(d[(y * probe.width + x) * 4] - d[((y - 1) * probe.width + x) * 4]);
+            }
+          }
+          return { mean: sum / (d.length / 4), struct: struct / ((probe.height * probe.width) / 4) };
+        };
+        // Wait for the picture to settle rather than sleeping a fixed time.
+        // Under load a fixed wait samples a frame that has not been drawn yet,
+        // which reads as "perfectly flat" and fails the comparison below for
+        // reasons that have nothing to do with the engines.
+        const settle = async (minMean = 20) => {
+          let last = stats();
+          for (let i = 0; i < 40; i++) {
+            await sleep(250);
+            const now = stats();
+            const moved = Math.abs(now.mean - last.mean) + Math.abs(now.struct - last.struct);
+            if (now.mean >= minMean && moved < 0.05) return now;
+            last = now;
+          }
+          return last;
+        };
+
+        const tabSwitch = (name) =>
+          [...document.querySelectorAll('.tabs .tab')]
+            .find((t) => t.textContent.trim().startsWith(name))
+            ?.querySelector('input');
+        const tabEl = (name) =>
+          [...document.querySelectorAll('.tabs .tab')].find((t) => t.textContent.trim().startsWith(name));
+
+        res.states = {};
+        res.states.both = await settle();
+        tabSwitch('Tape').click();
+        res.states.tubeOnly = await settle();
+        res.tapeStruck = !!tabEl('Tape')?.classList.contains('bypassed');
+        tabSwitch('Tape').click();
+        await settle();
+        tabSwitch('Tube').click();
+        res.states.tapeOnly = await settle();
+        tabSwitch('Tape').click();
+        res.states.neither = await settle();
+        return res;
+      }),
+    );
+  } catch (err) {
+    out.error = String(err);
+  }
+  await p.close();
+  return out;
+})();
+
+if (masters.error) {
+  failures.push(`engine masters: ${masters.error}`);
+} else {
+  if (!masters.advancedShown) {
+    failures.push('advanced: fine-detail parameters are hidden on a fresh profile — they should be shown by default');
+  }
+  if (!masters.tapeStruck) {
+    failures.push('engine masters: a bypassed engine is not marked as such on its tab');
+  }
+  const st = masters.states;
+  const d = (a, b) => Math.abs(a.mean - b.mean) + Math.abs(a.struct - b.struct);
+  if (d(st.both, st.tubeOnly) < 1.5) {
+    failures.push(`engine masters: switching the tape engine off barely changed the picture (${d(st.both, st.tubeOnly).toFixed(2)})`);
+  }
+  if (d(st.both, st.tapeOnly) < 1.5) {
+    failures.push(`engine masters: switching the tube engine off barely changed the picture (${d(st.both, st.tapeOnly).toFixed(2)})`);
+  }
+  // Both off is the flattest thing the app can produce: no scanlines, no tape.
+  if (!(st.neither.struct < st.both.struct && st.neither.struct < st.tapeOnly.struct)) {
+    failures.push(
+      `engine masters: with both engines off the picture is not the flattest (${st.neither.struct.toFixed(2)} against ${st.both.struct.toFixed(2)} and ${st.tapeOnly.struct.toFixed(2)})`,
+    );
+  }
+}
+
 await browser.close();
 server.close();
 
@@ -1542,6 +1694,9 @@ console.log(
   `  cpu       mean ${cpuBackend.cpuMean.toFixed(1)} vs GPU ${cpuBackend.gpuMean.toFixed(1)} · ${cpuBackend.perPixel.toFixed(1)}/px apart · ${(cpuBackend.cpuLit * 100).toFixed(1)}% lit`,
 );
 console.log(`  toggle    ${cpuBackend.toggle.join('  ')}`);
+console.log(
+  `  masters   both ${masters.states.both.struct.toFixed(1)} · tube-only ${masters.states.tubeOnly.struct.toFixed(1)} · tape-only ${masters.states.tapeOnly.struct.toFixed(1)} · neither ${masters.states.neither.struct.toFixed(1)} (vertical structure) · advanced shown`,
+);
 console.log(
   `  tape      cross-colour ${tapeEngine.rainbowBox.toFixed(3)} box vs ${tapeEngine.rainbowComb.toFixed(3)} comb · dot crawl ${tapeEngine.crawlMoves.toFixed(1)} moving vs ${tapeEngine.staticPhase.toFixed(1)} static · SP→EP ${tapeEngine.spVsEp.toFixed(1)}/px`,
 );

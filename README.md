@@ -70,9 +70,11 @@ they happened in reality.
 | **Tape** | The signal, and the videotape it was recorded on | Composite encode/decode at a 227.5 cycle subcarrier, box / notch / 1-line / 2-line comb demodulation, scanline phase shift, SP/LP/EP tape bandwidths, chroma loss, output sharpen, edge wave, head switching and tracking noise |
 | **Tube** | The display, and the room it is in | Beam reconstruction with blooming, aperture grille / slot / shadow masks, P22 persistence and gamut, halation, convergence, CRT gamma, hum bar, burn-in, glitching |
 
-They are not alternatives and there is no switch between them — a signal was
-damaged on its way to the television, and then the television displayed it
-badly. Each section has its own enable switch, so either half runs alone.
+A signal was damaged on its way to the television, and then the television
+displayed it badly, so both run in that order on every frame. Each tab carries
+a **master switch** that bypasses its whole engine in one click — a bypassed
+engine is struck through on its tab — and each section inside has its own
+enable switch as well.
 
 **Almost nothing in the Tape tab is drawn on.** Chroma really is modulated onto
 a subcarrier, band-limited, and separated out again. Dot crawl, rainbow
@@ -114,6 +116,9 @@ The app opens on a **guide** covering how to get footage in, what each reference
 tube is for, and how to build and animate a look. Close it with Esc or the ✕;
 tick *Don't show this when CRTBOX opens* if you don't want it again. The
 **Guide** button in the header, or <kbd>F1</kbd>, brings it back at any time.
+
+Every parameter is shown by default, fine detail included; untick **Advanced**
+in the header if you want the shorter list, and that preference is remembered.
 
 Every parameter and every section carries an **ⓘ**. It opens an inline panel
 explaining what the control physically is, what each end of its range looks

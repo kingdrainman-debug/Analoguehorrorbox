@@ -236,19 +236,49 @@ input[type='range']:disabled::-webkit-slider-thumb {
   border-bottom: 1px solid var(--line);
 }
 
-.tabs button {
+/* Each tab is a row: the label, and for the two engines a master bypass. */
+.tabs .tab {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-bottom: 2px solid transparent;
+  padding-right: 4px;
+  min-width: 0;
+}
+
+.tabs .tab.active {
+  border-bottom-color: var(--accent);
+}
+
+.tabs button {
   border: none;
   border-radius: 0;
   background: transparent;
-  padding: 9px 0;
+  padding: 9px 0 9px 4px;
   color: var(--muted);
-  border-bottom: 2px solid transparent;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.tabs button.active {
+.tabs .tab.active button {
   color: var(--text);
-  border-bottom-color: var(--accent);
+}
+
+/* A bypassed engine is struck through, so it reads as off at a glance even
+   from the other tab. */
+.tabs .tab.bypassed button {
+  color: var(--muted);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.tab-switch {
+  flex-shrink: 0;
+  transform: scale(0.78);
+  transform-origin: center;
 }
 
 .groups {

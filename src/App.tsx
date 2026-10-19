@@ -6,6 +6,7 @@ import {
   Settings,
   sanitize,
   str,
+  applyEngineMasters,
 } from './core/params';
 import { PRESETS, parsePreset, serializePreset } from './core/presets';
 import {
@@ -60,7 +61,28 @@ interface ExportResult {
 export default function App() {
   const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
   const [tab, setTab] = useState<Tab>('tape');
-  const [advanced, setAdvanced] = useState(false);
+  // Advanced parameters are shown by default. Hiding two thirds of a control
+  // panel behind a tickbox makes the application look smaller than it is, and
+  // people reasonably conclude a control does not exist rather than going
+  // looking for the switch that reveals it. Anyone who wants the shorter list
+  // can still have it, and that preference is remembered.
+  const [advanced, setAdvanced] = useState(() => {
+    try {
+      return localStorage.getItem('crtbox.hideAdvanced') !== '1';
+    } catch {
+      return true;
+    }
+  });
+
+  const chooseAdvanced = useCallback((show: boolean) => {
+    setAdvanced(show);
+    try {
+      if (show) localStorage.removeItem('crtbox.hideAdvanced');
+      else localStorage.setItem('crtbox.hideAdvanced', '1');
+    } catch {
+      /* private window — the preference simply does not persist */
+    }
+  }, []);
   const [backendChoice, setBackendChoice] = useState<BackendChoice>(() => {
     try {
       const v = localStorage.getItem('crtbox.backend');
@@ -279,7 +301,9 @@ export default function App() {
 
     // Animated parameters are resolved here, once per frame, so the preview and
     // every export path see exactly the same values at the same time.
-    const active = evaluateTimeline(settingsRef.current, timelineRef.current, time);
+    const active = applyEngineMasters(
+      evaluateTimeline(settingsRef.current, timelineRef.current, time),
+    );
     activeSettingsRef.current = active;
 
     telemetryRef.current = renderer.render({
@@ -1175,8 +1199,15 @@ export default function App() {
             />
           </label>
 
-          <label className="inline" title="Show the fine-detail parameters">
-            <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
+          <label
+            className="inline"
+            title="Every fine-detail parameter is shown by default. Untick to hide them."
+          >
+            <input
+              type="checkbox"
+              checked={advanced}
+              onChange={(e) => chooseAdvanced(e.target.checked)}
+            />
             Advanced
           </label>
 
@@ -1230,21 +1261,42 @@ export default function App() {
           <nav className="tabs">
             {(
               [
-                ['tape', 'Tape', 'The signal: composite encode and decode, and the videotape it was recorded on'],
-                ['video', 'Tube', 'The display: the glass, the beam, the phosphor and the set around it'],
-                ['audio', 'Sound', 'The speaker, the noise bed and the tape transport'],
-                ['link', 'A/V Link', 'What ties the picture and the sound together'],
-              ] as [Tab, string, string][]
-            ).map(([t, label, title]) => (
-              <button
-                key={t}
-                className={tab === t ? 'active' : ''}
-                onClick={() => setTab(t)}
-                title={title}
-              >
-                {label}
-              </button>
-            ))}
+                ['tape', 'Tape', 'The signal: composite encode and decode, and the videotape it was recorded on', 'engine.tape'],
+                ['video', 'Tube', 'The display: the glass, the beam, the phosphor and the set around it', 'engine.tube'],
+                ['audio', 'Sound', 'The speaker, the noise bed and the tape transport', null],
+                ['link', 'A/V Link', 'What ties the picture and the sound together', null],
+              ] as [Tab, string, string, string | null][]
+            ).map(([t, label, title, masterKey]) => {
+              const on = !masterKey || settings[masterKey] !== false;
+              return (
+                <div
+                  key={t}
+                  className={`tab${tab === t ? ' active' : ''}${on ? '' : ' bypassed'}`}
+                >
+                  <button onClick={() => setTab(t)} title={title}>
+                    {label}
+                  </button>
+                  {/*
+                    The master bypass sits on the tab rather than inside it, so
+                    an engine can be switched off without first navigating to
+                    the half of the app you are trying to silence.
+                  */}
+                  {masterKey && (
+                    <label
+                      className="switch tab-switch"
+                      title={on ? `Bypass the whole ${label} engine` : `Enable the ${label} engine`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={(e) => change(masterKey, e.target.checked)}
+                      />
+                      <span />
+                    </label>
+                  )}
+                </div>
+              );
+            })}
           </nav>
 
           <div className="groups">

@@ -26,10 +26,10 @@ function preset(
  */
 export const PRESETS: Preset[] = [
   preset('reference', 'Reference Tube', 'A properly set-up studio monitor on component. Geometry and phosphor only — no signal damage. Start here when you want the CRT look without the decay.', {
-    'composite.enabled': false,
-    'tape.enabled': false,
-    'vnoise.enabled': false,
-    'headswitch.enabled': false,
+    // No tape at all. Set with the engine master rather than four section
+    // switches, so turning it back on gives a working tape instead of four
+    // sections that are all still individually off.
+    'engine.tape': false,
     'colour.temperature': 0.1,
     'colour.chromaClip': 1.6,
     'signal.path': 'component',
@@ -388,10 +388,10 @@ export const PRESETS: Preset[] = [
   }),
 
   preset('arcade', 'Arcade Monitor', 'A well-driven 15 kHz arcade tube: aperture grille, hard 240p lines, and enough beam current to bloom. Signal path stays clean.', {
-    'composite.enabled': false,
-    'tape.enabled': false,
-    'vnoise.enabled': false,
-    'headswitch.enabled': false,
+    // No tape at all. Set with the engine master rather than four section
+    // switches, so turning it back on gives a working tape instead of four
+    // sections that are all still individually off.
+    'engine.tape': false,
     'colour.temperature': -0.1,
     'colour.saturation': 1.12,
     'colour.vibrance': 0.15,

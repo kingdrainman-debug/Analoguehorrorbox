@@ -221,10 +221,16 @@ function Engines() {
         sitting in.
       </p>
       <p>
-        They are not alternatives and there is no switch between them. Both run, in that
-        order, on every frame — which is the order it happened in reality. A signal was
-        damaged on its way to the television, and then the television displayed it badly.
-        Each tab has enable switches per section, so you can run either half on its own.
+        Both run, in that order, on every frame — which is the order it happened in
+        reality. A signal was damaged on its way to the television, and then the
+        television displayed it badly.
+      </p>
+      <p>
+        Each of the two tabs carries a <strong>master switch</strong>, so either engine
+        can be bypassed in one click without going to the tab first. A bypassed engine is
+        struck through on its tab. The two half-looks are both useful on their own: a
+        clean signal on a bad tube, and a bad tape shown flat. Switching one off is also
+        the fastest way to find out which half an artefact you do not want is coming from.
       </p>
 
       <h2>Why the tape engine matters</h2>
@@ -315,8 +321,8 @@ function Workflow() {
           Every section has one too.
         </li>
         <li>
-          Turn on <strong>Advanced</strong> in the header for the fine-detail parameters. They are
-          hidden by default because there are a great many of them.
+          Every parameter is shown, including the fine-detail ones. If the list is more
+          than you want, untick <strong>Advanced</strong> in the header to hide them.
         </li>
         <li>Export. Choose a format, an aspect and a resolution, then render.</li>
       </ol>

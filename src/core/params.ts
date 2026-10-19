@@ -71,7 +71,8 @@ export interface Group {
   id: string;
   label: string;
   /** Which pane the group lives in. */
-  kind: 'tape' | 'video' | 'audio' | 'link';
+  /** 'global' groups hold settings surfaced outside the tabs. */
+  kind: 'global' | 'tape' | 'video' | 'audio' | 'link';
   hint?: string;
   /** Key of the bool param that arms/disarms the whole group. */
   enableKey?: string;
@@ -191,6 +192,33 @@ const POWER_STATES: EnumOption[] = [
  * recorded on. The artefacts here are not drawn on — dot crawl and rainbows
  * fall out of modulating and demodulating for real, which is the whole point.
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * Engine masters
+ *
+ * One switch per emulator. Each section already has its own bypass, but
+ * turning off "the VHS" meant flipping four of them and turning off "the CRT"
+ * meant flipping ten, which is not a thing anyone wants to do twice.
+ *
+ * They are real parameters rather than interface state so that they travel in
+ * a preset: a look that is meant to be a clean signal on a bad tube, or a bad
+ * tape shown flat, says so in the file rather than depending on which switches
+ * the last person happened to leave down. The group is kind 'global', so it is
+ * never drawn as a tab — the switches live on the tab bar itself.
+ * ------------------------------------------------------------------ */
+
+const ENGINE_GROUP: Group[] = [
+  {
+    id: 'engine',
+    label: 'Engines',
+    kind: 'global',
+    hint: 'Master bypass for each of the two emulators.',
+    params: [
+      { key: 'engine.tape', type: 'bool', label: 'Tape engine', def: true, noRandom: true, hint: 'The whole signal half: composite encode and decode, the videotape, signal noise and head switching.' },
+      { key: 'engine.tube', type: 'bool', label: 'Tube engine', def: true, noRandom: true, hint: 'The whole display half: reception, geometry, beam, phosphor, glow, tube response and wear.' },
+    ],
+  },
+];
 
 const TAPE_GROUPS: Group[] = [
   {
@@ -690,6 +718,7 @@ const LINK_GROUPS: Group[] = [
 ];
 
 export const GROUPS: Group[] = [
+  ...ENGINE_GROUP,
   ...TAPE_GROUPS,
   ...VIDEO_GROUPS,
   ...AUDIO_GROUPS,
@@ -719,6 +748,32 @@ export const DEFAULTS: Settings = Object.fromEntries(
 ) as Settings;
 
 /** Numeric code for an enum value, for shaders and DSP. */
+/**
+ * Fold the engine masters down into the per-section bypasses.
+ *
+ * Rather than teaching both renderers about a second layer of switches, a
+ * master simply forces every enable key in its half off. That means the
+ * bypass logic stays in one place, the GPU and CPU backends cannot disagree
+ * about it, and a master behaves exactly as if you had flipped the sections
+ * by hand — because that is what it does.
+ *
+ * Returns the settings untouched in the ordinary case, so the common path
+ * allocates nothing.
+ */
+export function applyEngineMasters(s: Settings): Settings {
+  const tapeOn = s['engine.tape'] !== false;
+  const tubeOn = s['engine.tube'] !== false;
+  if (tapeOn && tubeOn) return s;
+
+  const out: Settings = { ...s };
+  for (const g of GROUPS) {
+    if (!g.enableKey) continue;
+    if (!tapeOn && g.kind === 'tape') out[g.enableKey] = false;
+    if (!tubeOn && g.kind === 'video') out[g.enableKey] = false;
+  }
+  return out;
+}
+
 export function enumCode(key: string, value: ParamValue): number {
   const p = PARAM_BY_KEY[key];
   if (!p || p.type !== 'enum') return 0;
